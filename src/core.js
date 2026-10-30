@@ -348,6 +348,7 @@
       border: 1px solid rgba(0,0,0,.18); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
     .dot svg { width: 16px; height: 16px; pointer-events: none; }
     .fab:active { transform: scale(.92); background: rgba(10,132,255,.85); }
+    .fabs, .dot, .backdrop, .sheet { pointer-events: auto; }
     .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.38); z-index: 2147483646; }
     .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647; max-height: 86vh; max-height: 86dvh;
       overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; background: var(--bg);
@@ -391,7 +392,11 @@
   function ui() {
     if (uiRoot && uiRoot.host.isConnected) return uiRoot;
     const host = document.createElement('ioss-ui');
-    host.style.cssText = 'all: initial !important; position: fixed !important; z-index: 2147483647 !important; top: 0 !important; left: 0 !important; width: 0 !important; height: 0 !important;';
+    // A full-viewport layer that lets taps through. Not 'all: initial' and not
+    // 0x0: page filters (e.g. Dark Mode's invert) must be able to target the
+    // host, and a filtered host becomes the containing block of its fixed
+    // children, so it has to cover the viewport for them to stay in place.
+    host.style.cssText = 'position: fixed !important; inset: 0 !important; width: auto !important; height: auto !important; margin: 0 !important; padding: 0 !important; border: 0 !important; background: none !important; display: block !important; pointer-events: none !important; z-index: 2147483647 !important; transform: none !important; opacity: 1 !important; visibility: visible !important;';
     const shadow = host.attachShadow({ mode: 'open' });
     shadow.appendChild(el('style', { text: UI_CSS }));
     const wrap = el('div', { class: 'wrap' }, [el('div', { class: 'toasts' }), el('div', { class: 'fabs' })]);

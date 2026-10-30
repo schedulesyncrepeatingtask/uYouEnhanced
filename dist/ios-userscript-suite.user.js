@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iOS Userscript Suite
 // @namespace    https://github.com/schedulesyncrepeatingtask/uYouEnhanced
-// @version      1.2.0
+// @version      1.3.0
 // @description  All-in-one Safari suite tuned for iPhone 13 mini: YouTube ad skipping, SponsorBlock, dislikes, Picture-in-Picture, video downloader, Google anti-tracking and cookie-banner rejection, Reddit login-wall removal and shortlink bypassing. Every module updates itself.
 // @author       iOS Userscript Suite contributors (see README for the original authors)
 // @license      AGPL-3.0-or-later
@@ -49,7 +49,7 @@
    * modules without waiting for a full userscript update.
    * ==================================================================== */
 
-  const SUITE = {"name":"iOS Userscript Suite","version":"1.2.0","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
+  const SUITE = {"name":"iOS Userscript Suite","version":"1.3.0","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
   const RAW = `https://raw.githubusercontent.com/${SUITE.repo}/${SUITE.branch}/dist/`;
   const STATE_KEY = 'ioss:state';
   const CODE_KEY = (id) => `ioss:code:${id}`;
@@ -383,6 +383,7 @@
       border: 1px solid rgba(0,0,0,.18); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
     .dot svg { width: 16px; height: 16px; pointer-events: none; }
     .fab:active { transform: scale(.92); background: rgba(10,132,255,.85); }
+    .fabs, .dot, .backdrop, .sheet { pointer-events: auto; }
     .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.38); z-index: 2147483646; }
     .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647; max-height: 86vh; max-height: 86dvh;
       overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; background: var(--bg);
@@ -426,7 +427,11 @@
   function ui() {
     if (uiRoot && uiRoot.host.isConnected) return uiRoot;
     const host = document.createElement('ioss-ui');
-    host.style.cssText = 'all: initial !important; position: fixed !important; z-index: 2147483647 !important; top: 0 !important; left: 0 !important; width: 0 !important; height: 0 !important;';
+    // A full-viewport layer that lets taps through. Not 'all: initial' and not
+    // 0x0: page filters (e.g. Dark Mode's invert) must be able to target the
+    // host, and a filtered host becomes the containing block of its fixed
+    // children, so it has to cover the viewport for them to stay in place.
+    host.style.cssText = 'position: fixed !important; inset: 0 !important; width: auto !important; height: auto !important; margin: 0 !important; padding: 0 !important; border: 0 !important; background: none !important; display: block !important; pointer-events: none !important; z-index: 2147483647 !important; transform: none !important; opacity: 1 !important; visibility: visible !important;';
     const shadow = host.attachShadow({ mode: 'open' });
     shadow.appendChild(el('style', { text: UI_CSS }));
     const wrap = el('div', { class: 'wrap' }, [el('div', { class: 'toasts' }), el('div', { class: 'fabs' })]);
@@ -5954,6 +5959,263 @@ function writeMobileDislikes() {
         elementReady(clickMsg).then(() => { setActiveElement('[data-placement-id="revbid-leaderboard"]'); fakeHidden(); });
       }
     });
+  }
+}));
+
+  /* ---- module: dark-mode v1.6.0 ---- */
+  register(({
+  id: 'dark-mode',
+  name: 'Dark Mode (eye protection)',
+  version: '1.6.0',
+  api: 1,
+  source: 'Dark Mode 护眼模式 1.5.8 (X.I.U, GPL-3.0)',
+  description: 'Dims, warms or inverts every website for night reading. Skips sites that already have their own dark theme, can follow the iPhone\'s dark mode, and can use a different mode by day and by night.',
+  runAt: 'start',
+  frames: false,
+  match: (u) => /^https?:$/.test(u.protocol) && u.hostname !== 'live.bilibili.com',
+  defaults: {
+    mode: '2',
+    nightMode: 'same',
+    followSystem: false,
+    runDuringTheDay: true,
+    dayStart: '6:00',
+    nightStart: '18:00',
+    autoRecognition: true,
+    m1Day: 60, m1Night: 50,
+    m2Day: 60, m2DayWarm: 40, m2Night: 50, m2NightWarm: 50,
+    m3Invert: 90,
+    m3Exclude: 'img, .img, video, [style*="background"][style*="url"], svg',
+    forcedSites: '',
+    disabledSites: ''
+  },
+  options: [
+    { key: 'mode', type: 'select', label: 'Mode', choices: [['1', '1 · Dim'], ['2', '2 · Dim + warm'], ['3', '3 · Invert (true dark)']] },
+    { key: 'nightMode', type: 'select', label: 'At night use', choices: [['same', 'Same mode'], ['1', '1 · Dim'], ['2', '2 · Dim + warm'], ['3', '3 · Invert']] },
+    { key: 'followSystem', type: 'bool', label: 'Only when the iPhone is in Dark Mode' },
+    { key: 'runDuringTheDay', type: 'bool', label: 'Also during the day (a little brighter)', help: 'Modes 1 and 2' },
+    { key: 'dayStart', type: 'text', label: 'Day starts at', help: 'e.g. 6:00' },
+    { key: 'nightStart', type: 'text', label: 'Night starts at', help: 'e.g. 18:00' },
+    { key: 'autoRecognition', type: 'bool', label: 'Skip sites that are already dark' },
+    { key: 'm1Day', type: 'number', label: 'Mode 1 brightness by day (%)', min: 1, max: 100 },
+    { key: 'm1Night', type: 'number', label: 'Mode 1 brightness at night (%)', min: 1, max: 100 },
+    { key: 'm2Day', type: 'number', label: 'Mode 2 brightness by day (%)', min: 1, max: 100 },
+    { key: 'm2DayWarm', type: 'number', label: 'Mode 2 warmth by day (%)', min: 0, max: 100 },
+    { key: 'm2Night', type: 'number', label: 'Mode 2 brightness at night (%)', min: 1, max: 100 },
+    { key: 'm2NightWarm', type: 'number', label: 'Mode 2 warmth at night (%)', min: 0, max: 100 },
+    { key: 'm3Invert', type: 'number', label: 'Mode 3 invert strength (%)', min: 50, max: 100 },
+    { key: 'm3Exclude', type: 'text', label: 'Mode 3: keep these un-inverted', help: 'CSS selectors, comma-separated' },
+    { key: 'forcedSites', type: 'text', label: 'Always darken these sites', help: 'Even if they look dark already, e.g. example.com' },
+    { key: 'disabledSites', type: 'text', label: 'Never darken these sites', help: 'Comma-separated hosts' }
+  ],
+
+  run(api, cfg) {
+    const host = location.host.toLowerCase();
+    const list = (s) => String(s || '').split(',').map((x) => x.trim().toLowerCase().replace(/^www\./, '')).filter(Boolean);
+    const bare = host.replace(/^www\./, '');
+    if (list(cfg.disabledSites).includes(bare)) return;
+    const forced = list(cfg.forcedSites).includes(bare);
+    const systemDark = matchMedia('(prefers-color-scheme: dark)');
+    const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+
+    const minutes = (t, d) => {
+      const m = String(t || '').match(/^(\d{1,2})(?::(\d{2}))?$/);
+      return m ? Math.min(23, +m[1]) * 60 + Math.min(59, +(m[2] || 0)) : d;
+    };
+    function isDaytime() {
+      const now = new Date();
+      const t = now.getHours() * 60 + now.getMinutes();
+      const a = minutes(cfg.dayStart, 360);
+      const b = minutes(cfg.nightStart, 1080);
+      return a < b ? t >= a && t < b : t >= a || t < b;
+    }
+
+    function buildCss() {
+      if (cfg.followSystem && !systemDark.matches) return '';
+      const day = isDaytime();
+      let mode = String(cfg.mode);
+      if (!day && cfg.nightMode && cfg.nightMode !== 'same') mode = String(cfg.nightMode);
+      if (mode === '1') {
+        if (day && !cfg.runDuringTheDay) return '';
+        return `html { filter: brightness(${num(day ? cfg.m1Day : cfg.m1Night, 60)}%) !important; }`;
+      }
+      if (mode === '2') {
+        if (day && !cfg.runDuringTheDay) return '';
+        return `html { filter: brightness(${num(day ? cfg.m2Day : cfg.m2Night, 60)}%) sepia(${num(day ? cfg.m2DayWarm : cfg.m2NightWarm, 40)}%) !important; }`;
+      }
+      // Mode 3: invert everything, then invert media back. The suite's own
+      // UI is inverted back too so toasts and the settings sheet look right.
+      let css = `html { filter: invert(${num(cfg.m3Invert, 90)}%) !important; text-shadow: 0 0 0 !important; }
+        ${cfg.m3Exclude || 'img, video, svg'}, ioss-ui, ioss-popup-ask { filter: invert(1) !important; }
+        img[alt="[公式]"] { filter: none !important; }`;
+      if (/(^|\.)search\.bilibili\.com$/.test(location.hostname)) {
+        css += 'ul.video-list img, ul.video-list .video-item .img .mask-video, ul.video-list .video-item .img .van-danmu, ul.video-list .video-item .img .van-framepreview { filter: none !important; }';
+      } else if (/\.bilibili\.com$/.test(location.hostname)) {
+        css += '.bpx-player-container[data-screen="full"] .bpx-player-video-wrap, .bpx-player-container[data-screen="web"] { filter: invert(1) !important; } .bpx-player-container[data-screen="web"] video { filter: none !important; }';
+      } else if (/\.huya\.com$/.test(location.hostname)) {
+        css += '#player-wrap[style="height: 100%;"], .player-loading, .sidebar-show, #player-ctrl-wrap { filter: invert(1) !important; }';
+      }
+      return css;
+    }
+
+    const style = api.addStyle('', 'ioss-darkmode');
+    let backdrop = null;
+    let skipped = false;
+    const apply = () => { style.textContent = skipped ? '' : buildCss(); };
+    apply();
+
+    // Fix: the original compared colours by gluing R, G and B together as
+    // text ("100"+"5"+"5" = 10055 counted as dark, rgb(95,95,95) did not)
+    // and missed YouTube's html[dark]. This uses real luminance.
+    function luminance(el) {
+      const m = getComputedStyle(el).backgroundColor.match(/[\d.]+/g);
+      if (!m || (m.length === 4 && +m[3] < 0.5)) return null;
+      const [r, g, b] = m.slice(0, 3).map((v) => { v = +v / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+    function looksDark() {
+      const root = document.documentElement;
+      const body = document.body;
+      if (!body) return false;
+      if (document.querySelector('html[dark], html[class*=dark], html[data-dark-theme*=dark], html[data-theme*=dark], html[data-color-mode*=dark], html[data-bs-theme=dark], body[class*=dark]')) return true;
+      const meta = document.querySelector('head > meta[name="color-scheme"]');
+      if (meta && /dark/.test(meta.content) && systemDark.matches) return true;
+      if (systemDark.matches && document.querySelector('head > meta[content*="https://challenges.cloudflare.com"]')) return true;
+      const lb = luminance(body);
+      const lr = luminance(root);
+      const l = lb != null ? lb : lr;
+      return l != null && l < 0.2;
+    }
+    function check() {
+      if (!document.body) return;
+      // Measure the page's own colours, not our white fallback background.
+      if (backdrop && backdrop.sheet) backdrop.sheet.disabled = true;
+      const dark = looksDark();
+      if (backdrop && backdrop.sheet) backdrop.sheet.disabled = false;
+      if (cfg.autoRecognition && !forced && dark) {
+        if (!skipped) api.log('site has its own dark theme, filter removed');
+        skipped = true;
+        apply();
+        if (backdrop) { backdrop.remove(); backdrop = null; }
+        return;
+      }
+      // Transparent pages need a white background or the filter has nothing to dim.
+      if (!backdrop && luminance(document.body) == null && luminance(document.documentElement) == null) {
+        backdrop = api.addStyle('html, body { background-color: #ffffff !important; }', 'ioss-darkmode-bg');
+      }
+    }
+    api.onReady(() => setTimeout(check, 150));
+    api.onLoad(() => setTimeout(check, 1500));
+
+    // Live updates: iPhone appearance changes, and day/night boundaries
+    // (checked once a minute, only while the tab is visible).
+    try { systemDark.addEventListener('change', apply); } catch (_) { systemDark.addListener(apply); }
+    let lastDay = isDaytime();
+    api.every(60000, () => { const d = isDaytime(); if (d !== lastDay) { lastDay = d; apply(); } });
+  }
+}));
+
+  /* ---- module: web-limits v1.4.0 ---- */
+  register(({
+  id: 'web-limits',
+  name: 'Remove web limits (copy & select)',
+  version: '1.4.0',
+  api: 1,
+  source: 'Remove web limits 网页限制解除 1.3 (Cat73, LGPL-3.0)',
+  description: 'Lets you select and copy text, and use the long-press menu, on sites that block it.',
+  runAt: 'start',
+  frames: false,
+  match: (u) => /^https?:$/.test(u.protocol),
+  defaults: {
+    dropHandlers: true,
+    allowDrag: false,
+    aggressive: false,
+    excludeSites: 'youtube.com, wikipedia.org, mail.qq.com, translate.google.*, docs.google.com, notion.so, office.com, figma.com, github.com'
+  },
+  options: [
+    { key: 'dropHandlers', type: 'bool', label: 'Ignore sites\' copy/select/long-press blockers', help: 'Off: only stop them from cancelling the action' },
+    { key: 'allowDrag', type: 'bool', label: 'Also unblock dragging text', help: 'Can break drag-and-drop on some sites' },
+    { key: 'aggressive', type: 'bool', label: 'Aggressive: also unblock mouse-down', help: 'For sites that block selection on press' },
+    { key: 'excludeSites', type: 'text', label: 'Leave these sites alone', help: 'Comma-separated; * matches any ending, e.g. translate.google.*' }
+  ],
+
+  // Runs in the page world: the original hooked addEventListener and
+  // preventDefault from Safari's isolated world, where the page never sees it.
+  pageUnlock: function (cfg) {
+    if (window.__iossUnlock) return;
+    window.__iossUnlock = true;
+    const blocked = ['contextmenu', 'select', 'selectstart', 'copy', 'cut']
+      .concat(cfg.allowDrag ? ['dragstart'] : [])
+      .concat(cfg.aggressive ? ['mousedown', 'mouseup'] : []);
+    const isBlocked = (t) => blocked.indexOf(t) !== -1;
+
+    // Fix: the original also ignored preventDefault() for keydown/keyup and
+    // mouse events on every site (Enter-to-send in chats inserted newlines
+    // too, custom drag/focus broke) and dropped every dragstart listener.
+    // Only the events that actually block copying are touched now.
+    const pd = Event.prototype.preventDefault;
+    Event.prototype.preventDefault = function () { if (!isBlocked(this.type)) return pd.apply(this, arguments); };
+    try {
+      const rv = Object.getOwnPropertyDescriptor(Event.prototype, 'returnValue');
+      if (rv && rv.set) {
+        Object.defineProperty(Event.prototype, 'returnValue', {
+          configurable: true, enumerable: rv.enumerable, get: rv.get,
+          set(v) { if (v === false && isBlocked(this.type)) return; rv.set.call(this, v); }
+        });
+      }
+    } catch (_) { /* ignore */ }
+
+    // Fix: the original wrapped listeners and called them without `this`,
+    // ignored listener objects and passive/once options, and treated an
+    // options object as "capture". Listeners for blocking events are now
+    // simply not registered; everything else goes through untouched.
+    if (cfg.dropHandlers) {
+      const add = EventTarget.prototype.addEventListener;
+      const drop = ['contextmenu', 'select', 'selectstart', 'copy', 'cut'].concat(cfg.allowDrag ? ['dragstart'] : []);
+      EventTarget.prototype.addEventListener = function (type, listener, options) {
+        if (drop.indexOf(type) !== -1 && (this === window || this === document || this === document.documentElement || this === document.body || (this && this.nodeType === 1 && !this.isContentEditable && !/^(INPUT|TEXTAREA)$/.test(this.tagName)))) return undefined;
+        return add.call(this, type, listener, options);
+      };
+    }
+
+    // DOM0 handlers such as oncopy="return false" cancel events without
+    // calling preventDefault(), so they are cleared. Only the usual hosts and
+    // elements with such attributes are visited, not every element.
+    const props = blocked.map((n) => 'on' + n);
+    const clear = (el) => { for (const p of props) { try { if (el && el[p]) el[p] = null; } catch (_) { /* ignore */ } } };
+    const sweep = () => {
+      clear(window);
+      clear(document);
+      clear(document.documentElement);
+      clear(document.body);
+      try { document.querySelectorAll(props.map((p) => `[${p}]`).join(',')).forEach(clear); } catch (_) { /* ignore */ }
+    };
+    sweep();
+    document.addEventListener('DOMContentLoaded', sweep, true);
+    window.addEventListener('load', sweep, true);
+    setTimeout(sweep, 2500);
+    setInterval(() => { if (!document.hidden) sweep(); }, 30000);
+  },
+
+  run(api, cfg) {
+    const target = (location.host + location.pathname).toLowerCase();
+    const excluded = String(cfg.excludeSites || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).some((pat) => {
+      const re = new RegExp('(^|\\.)' + pat.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '(/|$)');
+      return re.test(target);
+    });
+    if (excluded) return;
+
+    // iPhone: long-press callouts are blocked with -webkit-touch-callout,
+    // which the original never reset. Form fields keep their own behaviour.
+    api.addStyle(`
+      html, *:not(input):not(textarea):not([contenteditable]) { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }
+    `, 'ioss-web-limits');
+
+    const snapshot = JSON.parse(JSON.stringify(cfg));
+    if (!api.pageRun(this.pageUnlock, snapshot)) {
+      // Strict CSP: retry once the page exposes a nonce. preventDefault and
+      // DOM0 clearing still apply to everything registered before that.
+      api.onReady(() => api.pageRun(this.pageUnlock, snapshot) || api.log('page access blocked; CSS unlock only'));
+    }
   }
 }));
 

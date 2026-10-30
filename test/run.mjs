@@ -342,7 +342,7 @@ await test('settings sheet opens with #suite and saves toggles', {
   await page.goto('https://example.com/#suite');
   await until(async () => page.evaluate(() => !!document.querySelector('ioss-ui') && !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet')), 4000, 'sheet');
   const names = await page.evaluate(() => Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.mod .n')).map((n) => n.textContent));
-  assert(names.length === 12, 'all modules listed: ' + names.join(', '));
+  assert(names.length === 14, 'all modules listed: ' + names.join(', '));
   assert(await page.evaluate(() => location.hash === ''), 'hash removed');
   await page.evaluate(() => {
     const sw = document.querySelector('ioss-ui').shadowRoot.querySelector('input[aria-label="Enable Reddit: remove login wall"]');
@@ -411,6 +411,110 @@ await test('google lite: lazy-loads images added below the fold on Search', {
   });
   await until(() => page.evaluate(() => document.getElementById('late').getAttribute('loading') === 'lazy'), 3000, 'late image lazy');
   assert(await page.evaluate(() => !!document.querySelector('link[rel=preconnect][href="https://www.gstatic.com"]')), 'preconnect hint in head');
+});
+
+const htmlFilter = (page) => page.evaluate(() => getComputedStyle(document.documentElement).filter);
+
+await test('dark mode: dims and warms light sites by default', {
+  routes: { 'https://light.example/': html('<p>light page</p>') }
+}, async ({ page }) => {
+  await page.goto('https://light.example/');
+  const f = await htmlFilter(page);
+  assert(/brightness\(0\.[56]\) sepia\(0\.[45]\)/.test(f), 'mode 2 filter: ' + f);
+  await sleep(400);
+  assert(await page.evaluate(() => getComputedStyle(document.body).backgroundColor) === 'rgb(255, 255, 255)', 'white backdrop for transparent page');
+});
+
+await test('dark mode: skips sites that are already dark (luminance, html[dark])', {
+  routes: {
+    'https://dark.example/': html('<style>body{background:#1e1e1e;color:#eee}</style><p>dark page</p>'),
+    'https://m.youtube.com/': html('<script>document.documentElement.setAttribute("dark", "")</script><p>yt</p>'),
+    // The original glued R,G,B as text: orange rgb(255,80,0) -> 255800 < 898989
+    // counted as "dark", while dark grey rgb(95,95,95) -> 959595 did not.
+    'https://orange.example/': html('<style>body{background:rgb(255,80,0)}</style><p>orange</p>'),
+    'https://grey.example/': html('<style>body{background:rgb(95,95,95)}</style><p>grey</p>')
+  }
+}, async ({ page }) => {
+  for (const url of ['https://dark.example/', 'https://m.youtube.com/', 'https://grey.example/']) {
+    await page.goto(url);
+    await until(async () => (await htmlFilter(page)) === 'none', 3000, 'filter removed on ' + url);
+  }
+  await page.goto('https://orange.example/');
+  await sleep(600);
+  assert((await htmlFilter(page)) !== 'none', 'bright orange page still filtered');
+});
+
+await test('dark mode: invert mode keeps media and the suite UI un-inverted', {
+  routes: { 'https://light.example/': html('<img id="i" src="data:,"><p>x</p>') },
+  store: { 'ioss:state': JSON.stringify({ modules: { 'dark-mode': { settings: { mode: '3', nightMode: 'same' } } } }) }
+}, async ({ page }) => {
+  await page.goto('https://light.example/#suite');
+  assert(/invert\(0\.9\)/.test(await htmlFilter(page)), 'page inverted');
+  await until(() => page.evaluate(() => !!document.querySelector('ioss-ui')), 3000, 'ui');
+  const r = await page.evaluate(() => [getComputedStyle(document.getElementById('i')).filter, getComputedStyle(document.querySelector('ioss-ui')).filter]);
+  assert(r[0] === 'invert(1)' && r[1] === 'invert(1)', 'media & UI inverted back: ' + r);
+  const sheet = await until(() => page.evaluate(() => {
+    const s = document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet');
+    if (!s) return null;
+    const b = s.getBoundingClientRect();
+    return { top: b.top, bottom: Math.round(b.bottom), h: innerHeight };
+  }), 3000, 'sheet');
+  assert(sheet.bottom === sheet.h && sheet.top > 0, 'sheet still anchored to the bottom: ' + JSON.stringify(sheet));
+});
+
+await test('dark mode: "only in Dark Mode" follows the iPhone appearance live', {
+  routes: { 'https://light.example/': html('<p>x</p>') },
+  store: { 'ioss:state': JSON.stringify({ modules: { 'dark-mode': { settings: { followSystem: true } } } }) }
+}, async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('https://light.example/');
+  await sleep(300);
+  assert((await htmlFilter(page)) === 'none', 'off in light appearance');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await until(async () => (await htmlFilter(page)) !== 'none', 2000, 'on after switching to dark');
+});
+
+const LOCKED = `
+  <style>body{-webkit-user-select:none;user-select:none}</style>
+  <p id="t">Protected text</p><textarea id="chat"></textarea>
+  <script nonce="n0nce">
+    document.addEventListener('copy', (e) => { e.preventDefault(); window.__copyHandler = 1; });
+    document.oncontextmenu = () => false;
+    document.body.setAttribute('oncopy', 'return false');
+    document.getElementById('chat').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+  </script>`;
+
+for (const [label, body] of [['plain page', html(LOCKED)], ['strict CSP page', strict(html(LOCKED))]]) {
+  await test(`web limits: copy, select and long-press unblocked (${label})`, {
+    routes: { 'https://locked.example/': body }
+  }, async ({ page }) => {
+    await page.goto('https://locked.example/');
+    await sleep(300);
+    const r = await page.evaluate(() => {
+      const fire = (target, type, init) => { const e = new Event(type, { bubbles: true, cancelable: true, ...init }); target.dispatchEvent(e); return e.defaultPrevented; };
+      const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+      document.getElementById('chat').dispatchEvent(enter);
+      return {
+        copyBlocked: fire(document.getElementById('t'), 'copy'),
+        menuBlocked: fire(document.getElementById('t'), 'contextmenu'),
+        oncopy: document.body.oncopy,
+        select: getComputedStyle(document.body).userSelect,
+        enterStillHandled: enter.defaultPrevented
+      };
+    });
+    assert(!r.copyBlocked && !r.menuBlocked, 'copy/long-press not cancelled: ' + JSON.stringify(r));
+    assert(r.oncopy === null, 'inline oncopy cleared');
+    assert(r.select === 'text', 'text selectable: ' + r.select);
+    assert(r.enterStillHandled, 'Enter-to-send keeps working (original broke this)');
+  });
+}
+
+await test('web limits: leaves excluded sites alone', {
+  routes: { 'https://m.youtube.com/': html(LOCKED.replace(/ nonce="n0nce"/, '')) }
+}, async ({ page }) => {
+  await page.goto('https://m.youtube.com/');
+  await sleep(300);
+  assert(await page.evaluate(() => { const e = new Event('copy', { bubbles: true, cancelable: true }); document.body.dispatchEvent(e); return e.defaultPrevented; }), 'youtube untouched');
 });
 
 // YouTube (and other single-page apps) rewrite the address as soon as their
