@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iOS Userscript Suite
 // @namespace    https://github.com/schedulesyncrepeatingtask/uYouEnhanced
-// @version      1.1.1
+// @version      1.2.0
 // @description  All-in-one Safari suite tuned for iPhone 13 mini: YouTube ad skipping, SponsorBlock, dislikes, Picture-in-Picture, video downloader, Google anti-tracking and cookie-banner rejection, Reddit login-wall removal and shortlink bypassing. Every module updates itself.
 // @author       iOS Userscript Suite contributors (see README for the original authors)
 // @license      AGPL-3.0-or-later
@@ -49,7 +49,7 @@
    * modules without waiting for a full userscript update.
    * ==================================================================== */
 
-  const SUITE = {"name":"iOS Userscript Suite","version":"1.1.1","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
+  const SUITE = {"name":"iOS Userscript Suite","version":"1.2.0","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
   const RAW = `https://raw.githubusercontent.com/${SUITE.repo}/${SUITE.branch}/dist/`;
   const STATE_KEY = 'ioss:state';
   const CODE_KEY = (id) => `ioss:code:${id}`;
@@ -375,6 +375,13 @@
       color: #fff; background: rgba(20,20,20,.62); box-shadow: 0 3px 12px rgba(0,0,0,.35);
       -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); touch-action: manipulation; }
     .fab.show { display: flex; }
+    .dot { position: fixed; top: 0; left: 0; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+      z-index: 2147483601; touch-action: none; -webkit-user-select: none; user-select: none; transition: opacity .3s; will-change: transform; }
+    .dot.idle { opacity: .28; }
+    .dot i { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #1c1c1e;
+      background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.95), rgba(170,178,196,.75));
+      border: 1px solid rgba(0,0,0,.18); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+    .dot svg { width: 16px; height: 16px; pointer-events: none; }
     .fab:active { transform: scale(.92); background: rgba(10,132,255,.85); }
     .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.38); z-index: 2147483646; }
     .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647; max-height: 86vh; max-height: 86dvh;
@@ -486,6 +493,61 @@
     };
   }
 
+  // Draggable settings dot (idea from Google Lite): a 28pt dot inside a 44pt
+  // touch target. It fades after a few seconds, remembers where you left it
+  // and opens the settings sheet when tapped.
+  const GEAR_PATH = 'M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z';
+  function mountDot() {
+    const { wrap } = ui();
+    if (wrap.querySelector('.dot')) return;
+    const SIZE = 44;
+    const node = el('div', { class: 'dot', role: 'button', 'aria-label': `${SUITE.name} settings`, title: `${SUITE.name} settings` }, [el('i', {}, [icon(GEAR_PATH, 16)])]);
+    wrap.appendChild(node);
+    const clamp = (x, y) => ({
+      x: Math.round(Math.min(innerWidth - SIZE - 4, Math.max(4, x))),
+      y: Math.round(Math.min(innerHeight - SIZE - 4, Math.max(4, y)))
+    });
+    // Stored as fractions of the viewport so rotation keeps it on screen.
+    const saved = state.core.dotPos;
+    let pos = saved ? clamp(saved.fx * innerWidth, saved.fy * innerHeight) : clamp(innerWidth - SIZE - 4, innerHeight * 0.32);
+    const apply = () => { node.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)`; };
+    apply();
+    addEventListener('resize', () => { pos = clamp(pos.x, pos.y); apply(); }, { passive: true });
+    let idleTimer = 0;
+    const wake = () => { node.classList.remove('idle'); clearTimeout(idleTimer); idleTimer = setTimeout(() => node.classList.add('idle'), 3500); };
+    wake();
+    let start = null;
+    let moved = false;
+    node.addEventListener('pointerdown', (e) => {
+      start = { x: e.clientX, y: e.clientY, px: pos.x, py: pos.y };
+      moved = false;
+      try { node.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      wake();
+    });
+    node.addEventListener('pointermove', (e) => {
+      if (!start) return;
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      if (!moved && Math.abs(dx) + Math.abs(dy) > 6) moved = true;
+      if (moved) { pos = clamp(start.px + dx, start.py + dy); apply(); }
+    });
+    const end = (e, cancelled) => {
+      if (!start) return;
+      try { node.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      start = null;
+      if (moved) {
+        state.core.dotPos = { fx: pos.x / innerWidth, fy: pos.y / innerHeight };
+        saveState();
+      } else if (!cancelled) {
+        openPanel();
+      }
+      moved = false;
+      wake();
+    };
+    node.addEventListener('pointerup', (e) => end(e, false));
+    node.addEventListener('pointercancel', (e) => end(e, true));
+  }
+
   function whenBody(cb) {
     if (document.body) return cb();
     onReady(cb);
@@ -497,7 +559,8 @@
     autoUpdate: true,
     intervalHours: 12,
     notifyUpdates: true,
-    gear: false,
+    dot: true,
+    dotPos: null,
     fabSide: 'right',
     fabBottom: 76,
     debug: false,
@@ -771,7 +834,7 @@
           { key: 'autoUpdate', type: 'bool', label: 'Check for module updates automatically' },
           { key: 'intervalHours', type: 'number', label: 'Check every (hours)', min: 1, max: 168 },
           { key: 'notifyUpdates', type: 'bool', label: 'Show update messages' },
-          { key: 'gear', type: 'bool', label: 'Floating settings button', help: 'Otherwise open settings by adding #suite to any URL' },
+          { key: 'dot', type: 'bool', label: 'Settings dot on every page', help: 'Drag it anywhere; it fades when idle. Without it, add #suite to an address.' },
           { key: 'fabSide', type: 'select', label: 'Floating buttons side', choices: [['right', 'Right'], ['left', 'Left']] },
           { key: 'fabBottom', type: 'number', label: 'Floating buttons height (px from bottom)', min: 0, max: 600 },
           { key: 'debug', type: 'bool', label: 'Debug logging (Web Inspector)' }
@@ -851,13 +914,11 @@
     if (panelRequested) onReady(requestPanel);
 
     onReady(() => {
-      if (state.core.gear) {
-        fab({ title: 'iOS Suite settings', path: 'M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z', onTap: () => openPanel() }).show();
-      }
+      if (state.core.dot) safe('settings dot', mountDot);
       if (!state.core.welcomed && location.protocol === 'https:') {
         state.core.welcomed = true;
         saveState();
-        setTimeout(() => toast(`${SUITE.name} is active.\nAdd ${PANEL_HASHES[0]} to any address to open its settings.`, {
+        setTimeout(() => toast(`${SUITE.name} is active.\nTap the ⚙︎ dot (or add ${PANEL_HASHES[0]} to an address) for settings.`, {
           timeout: 9000, action: 'Settings', onAction: () => openPanel()
         }), 1500);
       }
@@ -1337,6 +1398,145 @@
     api.onLoad(fullScan);
     api.onUrlChange(() => { dirty = true; fullScan(); });
     api.every(4000, () => { if (dirty) { dirty = false; fullScan(); } });
+  }
+}));
+
+  /* ---- module: google-lite v1.2.0 ---- */
+  register(({
+  id: 'google-lite',
+  name: 'Google Lite (lighter Google & YouTube)',
+  version: '1.2.0',
+  api: 1,
+  source: 'Google Lite 谷歌系轻量化 1.1.1',
+  description: 'Throttles YouTube performance telemetry, lazy-loads images and frames below the fold on Google Search, Gmail and Drive, and pre-connects to Google\'s static servers. Does not touch ads, sign-in or the video stream.',
+  runAt: 'start',
+  frames: false,
+  match: (u) => {
+    const h = u.hostname;
+    if (/^(accounts|myaccount|pay)\.google\.com$/.test(h) || u.pathname.startsWith('/sorry/')) return false;
+    return /(^|\.)google\.[a-z.]+$/.test(h) || /(^|\.)youtube\.com$/.test(h) || /(^|\.)gmail\.com$/.test(h);
+  },
+  defaults: { telemetryThrottle: true, keepHistory: true, lazyBelowFold: true, preconnect: true, offSites: '' },
+  options: [
+    { key: 'telemetryThrottle', type: 'bool', label: 'Throttle YouTube telemetry', help: 'At most 5 performance pings per 30 s, 1 event log per 4 s' },
+    { key: 'keepHistory', type: 'bool', label: 'Never throttle watch history & resume position', help: 'Keeps /api/stats/playback and /watchtime untouched' },
+    { key: 'lazyBelowFold', type: 'bool', label: 'Lazy-load below-the-fold images (Search, Gmail, Drive)' },
+    { key: 'preconnect', type: 'bool', label: 'Pre-connect to Google static servers' },
+    { key: 'offSites', type: 'text', label: 'Turn off on these sites', help: 'Comma-separated, e.g. mail.google.com, drive.google.com' }
+  ],
+
+  // Runs in the page world: YouTube's fetch()/sendBeacon() can only be
+  // wrapped there (from Safari's sandbox the wrapper would be invisible).
+  pageThrottle: function (keepHistory) {
+    if (window.__iossGoogleLite) return;
+    window.__iossGoogleLite = true;
+    const METRIC_RE = /(\/youtubei\/v1\/stats\/|\/csi_204|\/ytcsi|\/ytStats|\/ptracking|\/api\/stats\/|\/generate_204)/i;
+    const BUSINESS_RE = /(\/youtubei\/v1\/log_event|\/watchtime|\/playback|\/qoe|\/ytdl)/i;
+    const HISTORY_RE = /\/api\/stats\/(playback|watchtime)|\/youtubei\/v1\/player\/heartbeat/i;
+    const LIMIT = 5;
+    const WINDOW = 30000;
+    const GAP = 4000;
+    // Fix: the original started with a budget of 0 and only started the
+    // refill timer after a request got through, so the budget never
+    // refilled and every matching request was blocked forever, including
+    // watch history and resume position.
+    let budget = LIMIT;
+    let resetTimer = 0;
+    let lastBusiness = 0;
+    const block = (url) => {
+      if (!url) return false;
+      if (keepHistory && HISTORY_RE.test(url)) return false;
+      if (METRIC_RE.test(url)) {
+        if (!resetTimer) resetTimer = setTimeout(() => { budget = LIMIT; resetTimer = 0; }, WINDOW);
+        if (budget <= 0) return true;
+        budget--;
+        return false;
+      }
+      if (BUSINESS_RE.test(url)) {
+        const now = Date.now();
+        if (now - lastBusiness < GAP) return true;
+        lastBusiness = now;
+      }
+      return false;
+    };
+    if (navigator.sendBeacon) {
+      const beacon = navigator.sendBeacon.bind(navigator);
+      navigator.sendBeacon = function (url, data) { return block(String(url || '')) ? true : beacon(url, data); };
+    }
+    if (window.fetch) {
+      const f = window.fetch;
+      window.fetch = function (input, init) {
+        let url = '';
+        try { url = typeof input === 'string' ? input : (input && input.url) || String(input); } catch (_) { /* ignore */ }
+        if (block(url)) return Promise.resolve(new Response(null, { status: 204 }));
+        return f.apply(this, arguments);
+      };
+    }
+  },
+
+  run(api, cfg) {
+    const host = location.hostname.toLowerCase();
+    const off = String(cfg.offSites || '').split(',').map((s) => s.trim().toLowerCase().replace(/^www\./, '')).filter(Boolean);
+    if (off.includes(host.replace(/^www\./, ''))) return;
+
+    const isYouTube = /(^|\.)youtube\.com$/.test(host);
+    const isSearch = api.isGoogleHost(host) && location.pathname.startsWith('/search');
+    const isGmail = host === 'mail.google.com' || /(^|\.)gmail\.com$/.test(host);
+    const isDrive = host === 'drive.google.com' || host === 'docs.google.com';
+
+    // 1. YouTube telemetry throttling (page world; retried once the page
+    //    has a CSP nonce we can borrow).
+    if (cfg.telemetryThrottle && isYouTube) {
+      if (!api.pageRun(this.pageThrottle, !!cfg.keepHistory)) api.onReady(() => api.pageRun(this.pageThrottle, !!cfg.keepHistory) || api.log('telemetry throttle blocked by CSP'));
+    }
+
+    // 2. Pre-connect hints, placed in <head> instead of a hidden <div>.
+    if (cfg.preconnect) {
+      api.onReady(() => {
+        if (document.getElementById('ioss-google-lite-hints')) return;
+        const frag = document.createDocumentFragment();
+        const add = (rel, href, cors) => { const l = document.createElement('link'); l.rel = rel; l.href = href; if (cors) l.crossOrigin = 'anonymous'; frag.appendChild(l); };
+        for (const h of ['https://www.gstatic.com', 'https://fonts.gstatic.com']) if (!location.href.startsWith(h)) add('preconnect', h, true);
+        const extra = isYouTube ? ['https://i.ytimg.com', 'https://yt3.ggpht.com'] : ['https://ssl.gstatic.com', 'https://lh3.googleusercontent.com', 'https://encrypted-tbn0.gstatic.com'];
+        for (const h of extra) add('dns-prefetch', h);
+        const marker = document.createElement('meta');
+        marker.id = 'ioss-google-lite-hints';
+        frag.appendChild(marker);
+        (document.head || document.documentElement).appendChild(frag);
+      });
+    }
+
+    // 3. Lazy-load below the fold. Only new images/frames are visited, in
+    //    one batch per frame, instead of rescanning the whole page.
+    if (cfg.lazyBelowFold && (isSearch || isGmail || isDrive)) {
+      const MARGIN = 200;
+      const mark = (n) => {
+        if (n.hasAttribute('loading')) return;
+        const top = n.getBoundingClientRect().top;
+        if (top > innerHeight + MARGIN) { n.setAttribute('loading', 'lazy'); n.setAttribute('decoding', 'async'); }
+      };
+      const scan = (root) => {
+        if (root.nodeType !== 1) return;
+        if (root.tagName === 'IMG' || root.tagName === 'IFRAME') mark(root);
+        root.querySelectorAll && root.querySelectorAll('img:not([loading]), iframe:not([loading])').forEach(mark);
+      };
+      const pending = new Set();
+      let queued = false;
+      const mo = new MutationObserver((muts) => {
+        for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) pending.add(n);
+        if (!pending.size || queued) return;
+        queued = true;
+        requestAnimationFrame(() => {
+          queued = false;
+          const nodes = Array.from(pending);
+          pending.clear();
+          for (const n of nodes) if (n.isConnected) scan(n);
+        });
+      });
+      const start = () => mo.observe(document.documentElement, { childList: true, subtree: true });
+      if (document.documentElement) start(); else api.onReady(start);
+      api.onReady(() => scan(document.body));
+    }
   }
 }));
 
