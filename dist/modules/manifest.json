@@ -1,0 +1,76 @@
+{
+  "suite": "1.1.0",
+  "api": 1,
+  "modules": {
+    "google-consent": {
+      "name": "Reject cookie banners (Google & YouTube)",
+      "version": "2.1.0",
+      "api": 1,
+      "file": "google-consent.js",
+      "sha256": "7bde7cfdb565ef685f554bf6164e5d3e7c67e5a62b020754bf8f1efae82b4690"
+    },
+    "google-privacy": {
+      "name": "Don't Track Me Google",
+      "version": "2.3.0",
+      "api": 1,
+      "file": "google-privacy.js",
+      "sha256": "e328471428acecf228a770ee6681d0ff5358ffa8d0f4572d89d37e42ba3ca5ac"
+    },
+    "reddit": {
+      "name": "Reddit: remove login wall",
+      "version": "1.1.0",
+      "api": 1,
+      "file": "reddit.js",
+      "sha256": "37544b623d99a3c8bcbb57aa2bd240b14604531189aa39e897e954fbc6f4aded"
+    },
+    "instagram": {
+      "name": "Instagram: browse without logging in",
+      "version": "1.1.0",
+      "api": 1,
+      "file": "instagram.js",
+      "sha256": "65256798114b52eca96c24777f4e8fec9f9c5e000bd4dbcbd2554c250e3ff4bb"
+    },
+    "yt-adblock": {
+      "name": "YouTube: remove ads",
+      "version": "6.22.0",
+      "api": 1,
+      "file": "yt-adblock.js",
+      "sha256": "e45f2f062cfc966a6902e64f5a0377d28a903d424394206e3dd2968c194491d0"
+    },
+    "yt-sponsorblock": {
+      "name": "SponsorBlock: skip sponsors",
+      "version": "2026.4.0",
+      "api": 1,
+      "file": "yt-sponsorblock.js",
+      "sha256": "28748f8e54d370e8a31afc7954c1bfddb3cd8b16ca8433aa7524c72ee1bac269"
+    },
+    "yt-dislike": {
+      "name": "Return YouTube Dislike",
+      "version": "3.2.1",
+      "api": 1,
+      "file": "yt-dislike.js",
+      "sha256": "3f8dd176739ea7e7830d9adef844053761bc8ae12db3ddbea23bd2215927814e"
+    },
+    "yt-player": {
+      "name": "YouTube: Picture-in-Picture & player tweaks",
+      "version": "1.4.0",
+      "api": 1,
+      "file": "yt-player.js",
+      "sha256": "a8f580a24827edf94dbb56cad31373949dd0161e216a4df5d9b3b71dc58139f4"
+    },
+    "downloader": {
+      "name": "Video downloader",
+      "version": "1.1.0",
+      "api": 1,
+      "file": "downloader.js",
+      "sha256": "d7f3ccb5cede7ef1dfb6e2ad410a67f1f3d6cd9870d8e9d892cba89bc24387f7"
+    },
+    "shortlinks": {
+      "name": "Bypass All Shortlinks",
+      "version": "96.9.0",
+      "api": 1,
+      "file": "shortlinks.js",
+      "sha256": "aa8878443ef651f089db925bcb79c158b46b0740fc066662f8a84012230f6619"
+    }
+  }
+}
