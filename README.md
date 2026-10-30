@@ -1,6 +1,6 @@
 # iOS Userscript Suite
 
-One Safari userscript for iPhone that combines and fixes eleven popular userscripts. It's tuned for the
+One Safari userscript for iPhone that combines and fixes thirteen popular userscripts. It's tuned for the
 **iPhone 13 mini** (375 pt wide screen, notch, home indicator, Safari's bottom tab bar), and **every
 module updates itself**.
 
@@ -16,6 +16,8 @@ module updates itself**.
 | Return YouTube Dislike | Return YouTube Dislike 3.2.0-ios | Shows dislike counts on m.youtube.com, the desktop site and Shorts |
 | YouTube: PiP & player tweaks | YouTube PIP Button (iOS Safari) 1.3 | Picture-in-Picture button; optional "Shorts → normal player" and background play |
 | Video downloader | All-in-One Video Downloader 1.0.19 | Download button for YouTube, TikTok, Instagram, X, Threads, Facebook, Pinterest, Snapchat, TED, Spotify and more |
+| Dark Mode | Dark Mode 护眼模式 1.5.8 | Dims, warms or inverts every site; skips sites that are already dark; can follow the iPhone's Dark Mode and switch by time of day |
+| Remove web limits | Remove web limits 网页限制解除 1.3 | Lets you select and copy text and use the long-press menu on sites that block it |
 | Bypass All Shortlinks | Bypass All Shortlinks 96.8 | Skips link-shortener waiting pages and has optional anti-annoyance tools |
 
 ## Install on iPhone
@@ -70,6 +72,31 @@ itself, which is the same trust you give any auto-updating userscript.
 - It used to write `style="undefined"` onto elements.
 - It now runs at most once per frame instead of on every DOM change.
 - Un-blurring runs in the page itself, where Reddit's own functions are reachable.
+
+**Dark Mode**
+- It called the synchronous `GM_getValue` on its first line. The Userscripts app only has `GM.getValue`, so it
+  crashed immediately there.
+- All of its settings were menu commands and `prompt()` dialogs, which iOS managers don't offer. They're now in
+  the settings sheet.
+- "Is this site already dark?" glued R, G and B together as text: orange rgb(255,80,0) counted as dark and dark
+  grey rgb(95,95,95) didn't. It now uses real luminance, recognises YouTube's `html[dark]`, and measures the page
+  without its own white fallback background.
+- On `bbs.pcbeta.com` it could poll at full speed forever.
+- New: it reacts live when the iPhone switches between Light and Dark, and when day turns to night. The suite's
+  own UI stays readable in invert mode.
+
+**Remove web limits**
+- Its hooks were installed from Safari's sandbox, where the page never sees them, so only the CSS part worked.
+  They now run inside the page.
+- It ignored `preventDefault()` for keyboard and mouse events on every site, so Enter-to-send in chats also
+  inserted a newline. It also dropped every drag-and-drop listener. Only copy, cut, select and long-press
+  blockers are touched now; dragging and mouse unblocking are options.
+- It called site handlers without `this`, broke listener objects and passive/once options, and leaked listeners.
+  Blocking listeners are now simply not registered.
+- On iPhone the long-press menu is blocked with `-webkit-touch-callout`, which it never reset.
+- It wrote into `<head>` at document-start, where it might not exist yet, and could crash.
+- Sites that need their own copy handling (Google Docs, Notion, GitHub, Office, Figma, …) are excluded by default;
+  the list is editable.
 
 **Google Lite**
 - Its telemetry budget started at 0 and the refill timer only started once a request got through, so it never
@@ -208,6 +235,8 @@ This suite contains modified versions of:
 - **Remove Reddit Login Requirement** by SoCuul (MIT)
 - **Browse Instagram Without Logging In** by dankdave69
 - **Google Lite 谷歌系轻量化** (MIT)
+- **Dark Mode 护眼模式** by X.I.U (GPL-3.0)
+- **Remove web limits 网页限制解除** by Cat73 (LGPL-3.0)
 - **All-in-One Video Downloader** by Daniel (MIT)
 - **Bypass All Shortlinks** by Bloggerpemula, with thanks to @JustOlaf, @Konf, @hacker09, @juansi, @NotYou,
   @cunaqr, @Rust1667 and @varram (bloggerpemula.pythonanywhere.com)

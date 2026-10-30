@@ -1,5 +1,5 @@
 {
-  "suite": "1.2.0",
+  "suite": "1.3.0",
   "api": 1,
   "modules": {
     "google-consent": {
@@ -78,6 +78,20 @@
       "api": 1,
       "file": "shortlinks.js",
       "sha256": "aa8878443ef651f089db925bcb79c158b46b0740fc066662f8a84012230f6619"
+    },
+    "dark-mode": {
+      "name": "Dark Mode (eye protection)",
+      "version": "1.6.0",
+      "api": 1,
+      "file": "dark-mode.js",
+      "sha256": "9e9a48e24fe91228aca96cfa3f203ba8a9de53ff11a26a9fefcdfd42b4f9efc2"
+    },
+    "web-limits": {
+      "name": "Remove web limits (copy & select)",
+      "version": "1.4.0",
+      "api": 1,
+      "file": "web-limits.js",
+      "sha256": "cb2a03b7be15666e33d7f1ff9c4159abee3326e7c2952f09e35f9ffcac0ec2d3"
     }
   }
 }

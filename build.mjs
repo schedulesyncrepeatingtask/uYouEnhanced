@@ -19,7 +19,7 @@ const suite = JSON.parse(read('src/suite.json'));
 const ORDER = [
   'google-consent', 'google-privacy', 'google-lite', 'reddit', 'instagram',
   'yt-adblock', 'yt-sponsorblock', 'yt-dislike', 'yt-player',
-  'downloader', 'shortlinks'
+  'downloader', 'shortlinks', 'dark-mode', 'web-limits'
 ];
 
 const raw = `https://raw.githubusercontent.com/${suite.repo}/${suite.branch}/dist/`;
@@ -46,8 +46,15 @@ const header = read('src/header.js')
   .replaceAll('{{FILE}}', suite.file);
 
 const core = read('src/core.js')
-  .replace('/*@@SUITE@@*/', JSON.stringify({ name: suite.name, version: suite.version, api: suite.api, repo: suite.repo, branch: suite.branch, file: suite.file }))
-  .replace('  /*@@MODULES@@*/', modules.map((m) => `  /* ---- module: ${m.id} v${m.def.version} ---- */\n  register(${m.code.trim()});\n`).join('\n'));
+  // Function replacements: a plain string would treat "$&", "$'" etc. in
+  // module code as replacement patterns and corrupt it.
+  .replace('/*@@SUITE@@*/', () => JSON.stringify({ name: suite.name, version: suite.version, api: suite.api, repo: suite.repo, branch: suite.branch, file: suite.file }))
+  .replace('  /*@@MODULES@@*/', () => modules.map((m) => `  /* ---- module: ${m.id} v${m.def.version} ---- */\n  register(${m.code.trim()});\n`).join('\n'));
+
+if (core.includes('@@MODULES@@')) throw new Error('module placeholder leaked into the bundle');
+for (const m of modules) {
+  if (!core.includes(m.code.trim())) throw new Error(`${m.id}: bundled code differs from src/modules/${m.id}.js`);
+}
 
 const bundle = `${header}\n${core}`;
 // Parse check (throws on syntax errors).
