@@ -1,6 +1,6 @@
 # iOS Userscript Suite
 
-One Safari userscript for iPhone that combines and fixes ten popular userscripts. It's tuned for the
+One Safari userscript for iPhone that combines and fixes eleven popular userscripts. It's tuned for the
 **iPhone 13 mini** (375 pt wide screen, notch, home indicator, Safari's bottom tab bar), and **every
 module updates itself**.
 
@@ -8,6 +8,7 @@ module updates itself**.
 |---|---|---|
 | Reject cookie banners | Google: Block Cookie Banner 2.0 | Rejects Google's and YouTube's consent dialogs before they appear |
 | Don't Track Me Google | Don't Track Me Google 2.2.2 | Cleans result links, removes ping/click tracking and beacons, can force SafeSearch off |
+| Google Lite | Google Lite 谷歌系轻量化 1.1.1 | Throttles YouTube performance telemetry (never watch history), lazy-loads below-the-fold images on Search/Gmail/Drive, pre-connects to Google's static servers |
 | Reddit: remove login wall | Remove Reddit Login Requirement 1.0.12 | Removes NSFW/login/"open the app" walls, un-blurs, re-enables scrolling |
 | Instagram: browse without logging in | Browse Instagram Without Logging In 1.0 | Hides the login/sign-up wall and bottom banner, re-enables scrolling, opens posts and reels as full pages |
 | YouTube: remove ads | youtube-adb 6.21 | Hides feed/search/banner ads, skips video ads, removes the ad-blocker pop-up |
@@ -30,8 +31,9 @@ module updates itself**.
 
 ### Settings
 
-On any website, add **`#suite`** to the end of the address (for example `youtube.com/#suite`). A bottom sheet
-opens where you can:
+Tap the small **⚙︎ dot** that floats on every page (it fades after a few seconds; drag it wherever you like). You
+can also add **`#suite`** to the end of any address (for example `youtube.com/#suite`). A bottom sheet opens
+where you can:
 
 - turn modules on or off
 - change each module's options
@@ -39,8 +41,11 @@ opens where you can:
 - run an update check straight away
 - move the floating buttons to the left or right side, or higher or lower on the screen
 
-If your manager supports menu commands (Stay or Tampermonkey), the sheet is also listed there. You can also turn
-on a small floating ⚙️ button in the sheet.
+If your manager supports menu commands (Stay or Tampermonkey), the sheet is also listed there. You can hide the
+dot in the sheet.
+
+**No dot on any page?** Then the script isn't running. Check that the extension is on, that **All Websites** is
+set to **Allow**, and that the suite is listed and switched on in the extension's popup (the puzzle-piece icon).
 
 ## Auto-update: one layer per module, plus the whole script
 
@@ -65,6 +70,15 @@ itself, which is the same trust you give any auto-updating userscript.
 - It used to write `style="undefined"` onto elements.
 - It now runs at most once per frame instead of on every DOM change.
 - Un-blurring runs in the page itself, where Reddit's own functions are reachable.
+
+**Google Lite**
+- Its telemetry budget started at 0 and the refill timer only started once a request got through, so it never
+  refilled. Every matching request was blocked forever, including `/api/stats/playback` and `/watchtime`, which
+  YouTube uses for watch history and resume position. The budget now starts full, and watch history is never
+  throttled (configurable).
+- Its fetch/beacon wrappers only work inside the page; they're now injected there instead of the sandbox.
+- Its 26 px dot (below Apple's 44 pt minimum) became the suite's settings dot, with a 44 pt touch target.
+- Per-site on/off and the options moved to the settings sheet. Hints go in `<head>` instead of a hidden `<div>`.
 
 **Instagram (Browse Without Logging In)**
 - It looked for the pop-up by 2020-era class names (`RnEpo _Yhr4`) that Instagram no longer uses, so it no longer
@@ -190,6 +204,7 @@ This suite contains modified versions of:
 - **youtube-adb** by iamfugui (MIT)
 - **Remove Reddit Login Requirement** by SoCuul (MIT)
 - **Browse Instagram Without Logging In** by dankdave69
+- **Google Lite 谷歌系轻量化** (MIT)
 - **All-in-One Video Downloader** by Daniel (MIT)
 - **Bypass All Shortlinks** by Bloggerpemula, with thanks to @JustOlaf, @Konf, @hacker09, @juansi, @NotYou,
   @cunaqr, @Rust1667 and @varram (bloggerpemula.pythonanywhere.com)

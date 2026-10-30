@@ -340,6 +340,13 @@
       color: #fff; background: rgba(20,20,20,.62); box-shadow: 0 3px 12px rgba(0,0,0,.35);
       -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); touch-action: manipulation; }
     .fab.show { display: flex; }
+    .dot { position: fixed; top: 0; left: 0; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+      z-index: 2147483601; touch-action: none; -webkit-user-select: none; user-select: none; transition: opacity .3s; will-change: transform; }
+    .dot.idle { opacity: .28; }
+    .dot i { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #1c1c1e;
+      background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.95), rgba(170,178,196,.75));
+      border: 1px solid rgba(0,0,0,.18); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+    .dot svg { width: 16px; height: 16px; pointer-events: none; }
     .fab:active { transform: scale(.92); background: rgba(10,132,255,.85); }
     .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.38); z-index: 2147483646; }
     .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647; max-height: 86vh; max-height: 86dvh;
@@ -451,6 +458,61 @@
     };
   }
 
+  // Draggable settings dot (idea from Google Lite): a 28pt dot inside a 44pt
+  // touch target. It fades after a few seconds, remembers where you left it
+  // and opens the settings sheet when tapped.
+  const GEAR_PATH = 'M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z';
+  function mountDot() {
+    const { wrap } = ui();
+    if (wrap.querySelector('.dot')) return;
+    const SIZE = 44;
+    const node = el('div', { class: 'dot', role: 'button', 'aria-label': `${SUITE.name} settings`, title: `${SUITE.name} settings` }, [el('i', {}, [icon(GEAR_PATH, 16)])]);
+    wrap.appendChild(node);
+    const clamp = (x, y) => ({
+      x: Math.round(Math.min(innerWidth - SIZE - 4, Math.max(4, x))),
+      y: Math.round(Math.min(innerHeight - SIZE - 4, Math.max(4, y)))
+    });
+    // Stored as fractions of the viewport so rotation keeps it on screen.
+    const saved = state.core.dotPos;
+    let pos = saved ? clamp(saved.fx * innerWidth, saved.fy * innerHeight) : clamp(innerWidth - SIZE - 4, innerHeight * 0.32);
+    const apply = () => { node.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)`; };
+    apply();
+    addEventListener('resize', () => { pos = clamp(pos.x, pos.y); apply(); }, { passive: true });
+    let idleTimer = 0;
+    const wake = () => { node.classList.remove('idle'); clearTimeout(idleTimer); idleTimer = setTimeout(() => node.classList.add('idle'), 3500); };
+    wake();
+    let start = null;
+    let moved = false;
+    node.addEventListener('pointerdown', (e) => {
+      start = { x: e.clientX, y: e.clientY, px: pos.x, py: pos.y };
+      moved = false;
+      try { node.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      wake();
+    });
+    node.addEventListener('pointermove', (e) => {
+      if (!start) return;
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      if (!moved && Math.abs(dx) + Math.abs(dy) > 6) moved = true;
+      if (moved) { pos = clamp(start.px + dx, start.py + dy); apply(); }
+    });
+    const end = (e, cancelled) => {
+      if (!start) return;
+      try { node.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      start = null;
+      if (moved) {
+        state.core.dotPos = { fx: pos.x / innerWidth, fy: pos.y / innerHeight };
+        saveState();
+      } else if (!cancelled) {
+        openPanel();
+      }
+      moved = false;
+      wake();
+    };
+    node.addEventListener('pointerup', (e) => end(e, false));
+    node.addEventListener('pointercancel', (e) => end(e, true));
+  }
+
   function whenBody(cb) {
     if (document.body) return cb();
     onReady(cb);
@@ -462,7 +524,8 @@
     autoUpdate: true,
     intervalHours: 12,
     notifyUpdates: true,
-    gear: false,
+    dot: true,
+    dotPos: null,
     fabSide: 'right',
     fabBottom: 76,
     debug: false,
@@ -736,7 +799,7 @@
           { key: 'autoUpdate', type: 'bool', label: 'Check for module updates automatically' },
           { key: 'intervalHours', type: 'number', label: 'Check every (hours)', min: 1, max: 168 },
           { key: 'notifyUpdates', type: 'bool', label: 'Show update messages' },
-          { key: 'gear', type: 'bool', label: 'Floating settings button', help: 'Otherwise open settings by adding #suite to any URL' },
+          { key: 'dot', type: 'bool', label: 'Settings dot on every page', help: 'Drag it anywhere; it fades when idle. Without it, add #suite to an address.' },
           { key: 'fabSide', type: 'select', label: 'Floating buttons side', choices: [['right', 'Right'], ['left', 'Left']] },
           { key: 'fabBottom', type: 'number', label: 'Floating buttons height (px from bottom)', min: 0, max: 600 },
           { key: 'debug', type: 'bool', label: 'Debug logging (Web Inspector)' }
@@ -816,13 +879,11 @@
     if (panelRequested) onReady(requestPanel);
 
     onReady(() => {
-      if (state.core.gear) {
-        fab({ title: 'iOS Suite settings', path: 'M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z', onTap: () => openPanel() }).show();
-      }
+      if (state.core.dot) safe('settings dot', mountDot);
       if (!state.core.welcomed && location.protocol === 'https:') {
         state.core.welcomed = true;
         saveState();
-        setTimeout(() => toast(`${SUITE.name} is active.\nAdd ${PANEL_HASHES[0]} to any address to open its settings.`, {
+        setTimeout(() => toast(`${SUITE.name} is active.\nTap the ⚙︎ dot (or add ${PANEL_HASHES[0]} to an address) for settings.`, {
           timeout: 9000, action: 'Settings', onAction: () => openPanel()
         }), 1500);
       }

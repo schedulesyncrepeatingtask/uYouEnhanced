@@ -301,7 +301,7 @@ await test('settings sheet opens with #suite and saves toggles', {
   await page.goto('https://example.com/#suite');
   await until(async () => page.evaluate(() => !!document.querySelector('ioss-ui') && !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet')), 4000, 'sheet');
   const names = await page.evaluate(() => Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.mod .n')).map((n) => n.textContent));
-  assert(names.length === 11, 'all modules listed: ' + names.join(', '));
+  assert(names.length === 12, 'all modules listed: ' + names.join(', '));
   assert(await page.evaluate(() => location.hash === ''), 'hash removed');
   await page.evaluate(() => {
     const sw = document.querySelector('ioss-ui').shadowRoot.querySelector('input[aria-label="Enable Reddit: remove login wall"]');
@@ -310,6 +310,66 @@ await test('settings sheet opens with #suite and saves toggles', {
   await until(() => store.has('ioss:state') && JSON.parse(store.get('ioss:state')).modules.reddit.enabled === false, 3000, 'saved');
   const fontSize = await page.evaluate(() => getComputedStyle(document.querySelector('ioss-ui').shadowRoot.querySelector('input[type=number]')).fontSize);
   assert(fontSize === '16px', 'inputs are 16px (no iOS zoom on focus): ' + fontSize);
+});
+
+await test('settings dot: visible by default, draggable, opens settings, remembers position', {
+  routes: { 'https://example.com/': html('<p>hello</p>') }
+}, async ({ page, store }) => {
+  await page.goto('https://example.com/');
+  const dotBox = async () => page.evaluate(() => {
+    const d = document.querySelector('ioss-ui') && document.querySelector('ioss-ui').shadowRoot.querySelector('.dot');
+    if (!d) return null;
+    const r = d.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  const box = await until(dotBox, 4000, 'dot');
+  assert(box.w >= 44 && box.h >= 44 && box.x + box.w <= 375, '44pt dot on screen: ' + JSON.stringify(box));
+  // Drag it to the left edge.
+  await page.mouse.move(box.x + 22, box.y + 22);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 22 - 100, box.y + 22 + 120, { steps: 8 });
+  await page.mouse.up();
+  const moved = await dotBox();
+  assert(moved.x < box.x - 80 && moved.y > box.y + 100, 'dragged: ' + JSON.stringify(moved));
+  assert(!(await page.evaluate(() => !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet'))), 'drag does not open settings');
+  await until(() => store.has('ioss:state') && JSON.parse(store.get('ioss:state')).core.dotPos, 2000, 'position saved');
+  // Tap opens the sheet.
+  await page.mouse.click(moved.x + 22, moved.y + 22);
+  await until(() => page.evaluate(() => !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet')), 2000, 'sheet');
+  // Position survives a reload.
+  await page.reload();
+  const again = await until(dotBox, 4000, 'dot after reload');
+  assert(Math.abs(again.x - moved.x) < 2 && Math.abs(again.y - moved.y) < 2, 'position restored: ' + JSON.stringify(again));
+});
+
+await test('google lite: throttles YouTube telemetry but keeps watch history', {
+  routes: { 'https://m.youtube.com/': strict(html('<script nonce="n0nce">window.__page = 1;</script><p>yt</p>')) }
+}, async ({ page, hits }) => {
+  await page.goto('https://m.youtube.com/');
+  await until(() => page.evaluate(() => !!window.__iossGoogleLite), 4000, 'throttle injected through strict CSP');
+  await page.evaluate(async () => {
+    for (let i = 0; i < 8; i++) await fetch('/api/stats/qoe?n=' + i);
+    for (let i = 0; i < 3; i++) await fetch('/api/stats/watchtime?n=' + i);
+    for (let i = 0; i < 2; i++) await fetch('/youtubei/v1/log_event?n=' + i, { method: 'POST' });
+  });
+  const count = (re) => hits.filter((h) => re.test(h)).length;
+  assert(count(/\/api\/stats\/qoe/) === 5, 'performance pings capped at 5: ' + count(/\/api\/stats\/qoe/));
+  assert(count(/\/api\/stats\/watchtime/) === 3, 'watch history untouched: ' + count(/\/api\/stats\/watchtime/));
+  assert(count(/log_event/) === 1, 'event log throttled: ' + count(/log_event/));
+});
+
+await test('google lite: lazy-loads images added below the fold on Search', {
+  routes: { 'https://www.google.com/search': html('<div style="height:3000px"></div><img id="top" src="data:,">') }
+}, async ({ page }) => {
+  await page.goto('https://www.google.com/search?q=x&safe=off');
+  await page.evaluate(() => {
+    const img = document.createElement('img');
+    img.id = 'late';
+    img.src = 'data:,';
+    document.body.appendChild(img);
+  });
+  await until(() => page.evaluate(() => document.getElementById('late').getAttribute('loading') === 'lazy'), 3000, 'late image lazy');
+  assert(await page.evaluate(() => !!document.querySelector('link[rel=preconnect][href="https://www.gstatic.com"]')), 'preconnect hint in head');
 });
 
 // YouTube (and other single-page apps) rewrite the address as soon as their

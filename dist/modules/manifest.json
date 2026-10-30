@@ -1,5 +1,5 @@
 {
-  "suite": "1.1.1",
+  "suite": "1.2.0",
   "api": 1,
   "modules": {
     "google-consent": {
@@ -15,6 +15,13 @@
       "api": 1,
       "file": "google-privacy.js",
       "sha256": "e328471428acecf228a770ee6681d0ff5358ffa8d0f4572d89d37e42ba3ca5ac"
+    },
+    "google-lite": {
+      "name": "Google Lite (lighter Google & YouTube)",
+      "version": "1.2.0",
+      "api": 1,
+      "file": "google-lite.js",
+      "sha256": "9306b31e7706f85bcd7067c49962b570b42a1e2c7bbef57309a8de125163b710"
     },
     "reddit": {
       "name": "Reddit: remove login wall",
