@@ -767,11 +767,28 @@
     });
   }
 
-  function handlePanelHash() {
-    const h = (location.hash || '').toLowerCase();
-    if (!PANEL_HASHES.includes(h)) return;
-    try { history.replaceState(history.state, '', location.pathname + location.search); } catch (_) { /* ignore */ }
+  // Single-page sites such as YouTube rewrite the address while loading and
+  // drop "#suite" before DOMContentLoaded, so the hash is read once at
+  // document-start and hashchange is watched from that moment on (using the
+  // event's own newURL, since the site may already have rewritten it).
+  const wantsPanel = (hash) => PANEL_HASHES.includes(String(hash || '').toLowerCase());
+  let panelRequested = isTop && wantsPanel(location.hash);
+  let booted = false;
+
+  function requestPanel() {
+    if (!booted) { panelRequested = true; return; }
+    if (wantsPanel(location.hash)) {
+      try { history.replaceState(history.state, '', location.pathname + location.search); } catch (_) { /* ignore */ }
+    }
     openPanel();
+  }
+
+  if (isTop) {
+    window.addEventListener('hashchange', (e) => {
+      let hash = location.hash;
+      try { hash = new URL(e.newURL).hash; } catch (_) { /* keep location.hash */ }
+      if (wantsPanel(hash)) requestPanel();
+    }, true);
   }
 
   /* ------------------------------------------------------------- boot */
@@ -795,8 +812,8 @@
 
     menu('⚙️ iOS Suite settings', () => openPanel());
     menu('🔄 Check for updates', () => checkUpdates(true));
-    window.addEventListener('hashchange', handlePanelHash);
-    onReady(handlePanelHash);
+    booted = true;
+    if (panelRequested) onReady(requestPanel);
 
     onReady(() => {
       if (state.core.gear) {
