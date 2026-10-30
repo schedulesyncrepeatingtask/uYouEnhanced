@@ -1,7 +1,7 @@
 ({
   id: 'downloader',
   name: 'Video downloader',
-  version: '1.1.0',
+  version: '1.2.0',
   api: 1,
   source: 'All-in-One Video Downloader 1.0.19 (Daniel)',
   description: 'Adds a download button for videos on YouTube, YouTube Music, TikTok, Instagram, X/Twitter, Threads, Facebook, Pinterest, Snapchat, TED, Douyin, Xiaohongshu and Spotify. Tapping it opens the downloader service with the current video. Opening a direct video file shows a Save button.',
@@ -10,9 +10,10 @@
   SITES: /(^|\.)(youtube\.com|tiktok\.com|instagram\.com|x\.com|twitter\.com|threads\.(com|net)|facebook\.com|pinterest\.[a-z.]+|snapchat\.com|ted\.com|douyin\.com|xiaohongshu\.com|spotify\.com)$/,
   CDN: /(googlevideo\.com|tiktokcdn(-eu|-us|-af)?\.com|douyinvod\.com|fbcdn\.net|twimg\.com|zjcdn\.com|snssdk\.com|tiktokv\.com|douyinstatic\.com|xhscdn\.com|amemv\.com|tikwm\.com|douyinpic\.com|douyinmusicpromotion\.com|cdninstagram\.com|licdn\.com|sc-cdn\.net|pinimg\.com|tedcdn\.com|dmcdn\.net|tumblr\.com|rutube\.ru|uma\.media)$/,
   match: function (u) { return this.SITES.test(u.hostname) || this.CDN.test(u.hostname); },
-  defaults: { fab: true, inlineX: true, service: 'tool77', copyOnLongPress: true },
+  defaults: { fab: true, ytInline: true, inlineX: true, service: 'tool77', copyOnLongPress: true },
   options: [
     { key: 'fab', type: 'bool', label: 'Floating download button on video pages' },
+    { key: 'ytInline', type: 'bool', label: 'YouTube: download button left of the like button', help: 'Replaces the floating button on watch pages' },
     { key: 'inlineX', type: 'bool', label: 'Download button in X/Twitter & Threads posts' },
     { key: 'copyOnLongPress', type: 'bool', label: 'Long-press the button to copy the video link' },
     { key: 'service', type: 'select', label: 'Downloader service', choices: [['tool77', 'tool77.com (original service)'], ['copy', 'Just copy the link']] }
@@ -184,6 +185,58 @@
       openService(target);
     };
 
+    // ---- YouTube: a download pill in the action bar, left of the like
+    // button (m.youtube.com and the desktop site). Shorts keep the floating
+    // button because their buttons are a vertical column on the video.
+    const isYouTubeWatch = () => /(^|\.)(m|www)\.youtube\.com$/.test(host) && location.pathname === '/watch';
+    const inlineYouTube = () => {
+      if (!cfg.ytInline || !isYouTubeWatch()) return null;
+      const like = document.querySelector(
+        '.slim-video-action-bar-actions like-button-view-model, .slim-video-action-bar-actions ytm-segmented-like-dislike-button-renderer, ' +
+        'ytm-slim-video-action-bar-renderer like-button-view-model, #top-level-buttons-computed segmented-like-dislike-button-view-model, ' +
+        '#top-level-buttons-computed ytd-segmented-like-dislike-button-renderer, #top-level-buttons-computed like-button-view-model');
+      if (!like) return null;
+      const row = like.closest('.slim-video-action-bar-actions, #top-level-buttons-computed') || like.parentElement;
+      let slot = like;
+      while (slot.parentElement && slot.parentElement !== row) slot = slot.parentElement;
+      const existing = row.querySelector(':scope > .ioss-yt-dl');
+      if (existing) {
+        if (existing.nextElementSibling !== slot) row.insertBefore(existing, slot);
+        return existing;
+      }
+      const btn = api.el('button', {
+        type: 'button', class: 'ioss-yt-dl', 'data-ioss-owned': '1', 'aria-label': 'Download video', title: 'Download video'
+      }, [api.icon(DL_PATH, 22)]);
+      btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); act(); });
+      let pressTimer = 0;
+      btn.addEventListener('touchstart', () => {
+        if (!cfg.copyOnLongPress) return;
+        pressTimer = setTimeout(() => {
+          pressTimer = -1;
+          const t = resolve();
+          if (t) api.copy(t).then((ok) => api.toast(ok ? 'Video link copied' : t));
+        }, 600);
+      }, { passive: true });
+      btn.addEventListener('touchend', (e) => { if (pressTimer === -1) e.preventDefault(); clearTimeout(pressTimer); pressTimer = 0; });
+      btn.addEventListener('touchmove', () => { clearTimeout(pressTimer); pressTimer = 0; }, { passive: true });
+      row.insertBefore(btn, slot);
+      return btn;
+    };
+    if (cfg.ytInline && /(^|\.)(m|www)\.youtube\.com$/.test(host)) {
+      api.addStyle(`
+        .ioss-yt-dl { flex: none; display: inline-flex; align-items: center; justify-content: center; height: 36px; min-width: 44px;
+          padding: 0 12px; margin: 0 8px 0 0; border: 0; border-radius: 18px; cursor: pointer; align-self: center;
+          color: var(--yt-spec-text-primary, #0f0f0f); background: var(--yt-spec-badge-chip-background, rgba(0,0,0,.05));
+          -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+        html[dark] .ioss-yt-dl, [dark] .ioss-yt-dl { color: var(--yt-spec-text-primary, #f1f1f1); background: var(--yt-spec-badge-chip-background, rgba(255,255,255,.1)); }
+        .ioss-yt-dl:active { opacity: .6; }
+        .ioss-yt-dl svg { width: 22px; height: 22px; pointer-events: none; }
+      `, 'ioss-yt-dl-css');
+      inlineYouTube();
+      api.observe(document.body, { childList: true, subtree: true }, inlineYouTube, { throttle: 400 });
+      api.onUrlChange(() => setTimeout(inlineYouTube, 300));
+    }
+
     if (cfg.fab) {
       const button = api.fab({
         title: 'Download video',
@@ -200,7 +253,8 @@
       const refresh = () => {
         const hasVideo = !!document.querySelector('video');
         const t = resolve();
-        if (t || (hasVideo && !/(^|\.)youtube\.com$/.test(host))) button.show(); else button.hide();
+        const inline = isYouTubeWatch() && document.querySelector('.ioss-yt-dl');
+        if (!inline && (t || (hasVideo && !/(^|\.)youtube\.com$/.test(host)))) button.show(); else button.hide();
       };
       refresh();
       api.onUrlChange(() => setTimeout(refresh, 400));
