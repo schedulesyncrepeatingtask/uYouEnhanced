@@ -342,7 +342,7 @@ await test('settings sheet opens with #suite and saves toggles', {
   await page.goto('https://example.com/#suite');
   await until(async () => page.evaluate(() => !!document.querySelector('ioss-ui') && !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet')), 4000, 'sheet');
   const names = await page.evaluate(() => Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.mod .n')).map((n) => n.textContent));
-  assert(names.length === 14, 'all modules listed: ' + names.join(', '));
+  assert(names.length === 15, 'all modules listed: ' + names.join(', '));
   assert(await page.evaluate(() => location.hash === ''), 'hash removed');
   await page.evaluate(() => {
     const sw = document.querySelector('ioss-ui').shadowRoot.querySelector('input[aria-label="Enable Reddit: remove login wall"]');
@@ -515,6 +515,75 @@ await test('web limits: leaves excluded sites alone', {
   await page.goto('https://m.youtube.com/');
   await sleep(300);
   assert(await page.evaluate(() => { const e = new Event('copy', { bubbles: true, cancelable: true }); document.body.dispatchEvent(e); return e.defaultPrevented; }), 'youtube untouched');
+});
+
+const CLEAN_PAGE = html(`
+  <a id="utm" href="https://shop.example/item?id=7&utm_source=news&fbclid=abc&utm_medium=mail">utm</a>
+  <a id="func" href="https://flights.example/search?from=JFK&to=LHR&ref=main&source=en">functional</a>
+  <a id="gbk" href="https://cn.example/s?q=%C4%E3%BA%C3&spm=a.b.c&page=2">gbk</a>
+  <a id="mail" href="mailto:a@b.c?subject=hi">mail</a>`);
+
+await test('clean urls: strips trackers, keeps functional params and their encoding', {
+  routes: { 'https://news.example/': CLEAN_PAGE }
+}, async ({ page }) => {
+  await page.goto('https://news.example/a?utm_source=x&id=5');
+  await until(() => page.evaluate(() => location.search === '?id=5'), 3000, 'address bar cleaned');
+  const r = await page.evaluate(() => Object.fromEntries(['utm', 'func', 'gbk', 'mail'].map((id) => [id, document.getElementById(id).getAttribute('href')])));
+  assert(r.utm === 'https://shop.example/item?id=7', 'trackers removed: ' + r.utm);
+  assert(r.func === 'https://flights.example/search?from=JFK&to=LHR&ref=main&source=en', 'functional params kept: ' + r.func);
+  assert(r.gbk === 'https://cn.example/s?q=%C4%E3%BA%C3&page=2', 'GBK encoding preserved byte-for-byte: ' + r.gbk);
+  assert(r.mail === 'mailto:a@b.c?subject=hi', 'mailto untouched');
+  // Single-page navigation: cleaned, and the app's history.state survives.
+  await page.evaluate(() => {
+    history.pushState({ app: 'route-1' }, '', '/b?utm_campaign=c&x=1');
+    const a = document.createElement('a');
+    a.id = 'late';
+    a.href = 'https://x.example/?utm_term=t&ok=1';
+    document.body.appendChild(a);
+  });
+  await until(() => page.evaluate(() => location.search === '?x=1'), 3000, 'SPA url cleaned');
+  assert(JSON.stringify(await page.evaluate(() => history.state)) === '{"app":"route-1"}', 'history.state preserved');
+  await until(() => page.evaluate(() => document.getElementById('late').getAttribute('href') === 'https://x.example/?ok=1'), 2000, 'new link cleaned');
+});
+
+await test('clean urls: aggressive mode uses the original list', {
+  routes: { 'https://news.example/': CLEAN_PAGE },
+  store: { 'ioss:state': JSON.stringify({ modules: { 'clean-urls': { settings: { aggressive: true } } } }) }
+}, async ({ page }) => {
+  await page.goto('https://news.example/');
+  await until(() => page.evaluate(() => document.getElementById('func').getAttribute('href') === 'https://flights.example/search?to=LHR'), 3000, 'aggressive strip');
+});
+
+await test('clean urls: sign-in pages keep their address; site rules (YouTube, Amazon, Google, GitHub)', {
+  routes: {
+    'https://accounts.example.com/': html('<p>login</p>'),
+    'https://m.youtube.com/': html(`<a id="redir" href="https://www.youtube.com/redirect?event=video_description&redir_token=TOKEN&q=https%3A%2F%2Fexample.com">x</a>
+      <a id="share" href="https://youtu.be/abc?si=TRACK&t=42">s</a>`),
+    'https://www.amazon.com/': html('<a id="p" href="https://www.amazon.com/Some-Thing/dp/B000123/ref=sr_1_1?crid=X&keywords=cup&qid=1&sprefix=c">p</a>'),
+    'https://www.google.com/': html('<a id="h" href="https://example.com/page#utm_source=g&section=2&utm_medium=x">h</a>'),
+    'https://github.com/': html('<a id="g" href="https://github.com/o/r/compare?ref=feature-x&ref_cta=y">g</a>')
+  }
+}, async ({ page }) => {
+  await page.goto('https://accounts.example.com/oauth/authorize?utm_source=x&redir=%2Fhome');
+  await sleep(600);
+  assert(page.url().includes('utm_source=x&redir='), 'auth page untouched: ' + page.url());
+  await page.goto('https://m.youtube.com/');
+  await sleep(400);
+  const yt = await page.evaluate(() => [document.getElementById('redir').getAttribute('href'), document.getElementById('share').getAttribute('href')]);
+  assert(yt[0].includes('redir_token=TOKEN'), 'redir_token kept (original broke these links): ' + yt[0]);
+  assert(yt[1] === 'https://youtu.be/abc?t=42', 'share tracking removed: ' + yt[1]);
+  await page.goto('https://www.amazon.com/s');
+  await sleep(400);
+  const amz = await page.evaluate(() => document.getElementById('p').getAttribute('href'));
+  assert(amz === 'https://www.amazon.com/Some-Thing/dp/B000123/?keywords=cup', 'amazon cleaned: ' + amz);
+  await page.goto('https://www.google.com/');
+  await sleep(400);
+  const g = await page.evaluate(() => document.getElementById('h').getAttribute('href'));
+  assert(g === 'https://example.com/page#section=2', 'fragment trackers removed, rest kept: ' + g);
+  await page.goto('https://github.com/');
+  await sleep(400);
+  const gh = await page.evaluate(() => document.getElementById('g').getAttribute('href'));
+  assert(gh === 'https://github.com/o/r/compare?ref=feature-x', 'github ref kept: ' + gh);
 });
 
 // YouTube (and other single-page apps) rewrite the address as soon as their

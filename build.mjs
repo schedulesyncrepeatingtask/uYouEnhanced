@@ -19,7 +19,7 @@ const suite = JSON.parse(read('src/suite.json'));
 const ORDER = [
   'google-consent', 'google-privacy', 'google-lite', 'reddit', 'instagram',
   'yt-adblock', 'yt-sponsorblock', 'yt-dislike', 'yt-player',
-  'downloader', 'shortlinks', 'dark-mode', 'web-limits'
+  'downloader', 'shortlinks', 'dark-mode', 'web-limits', 'clean-urls'
 ];
 
 const raw = `https://raw.githubusercontent.com/${suite.repo}/${suite.branch}/dist/`;
