@@ -301,7 +301,7 @@ await test('settings sheet opens with #suite and saves toggles', {
   await page.goto('https://example.com/#suite');
   await until(async () => page.evaluate(() => !!document.querySelector('ioss-ui') && !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet')), 4000, 'sheet');
   const names = await page.evaluate(() => Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.mod .n')).map((n) => n.textContent));
-  assert(names.length === 10, 'all modules listed: ' + names.join(', '));
+  assert(names.length === 11, 'all modules listed: ' + names.join(', '));
   assert(await page.evaluate(() => location.hash === ''), 'hash removed');
   await page.evaluate(() => {
     const sw = document.querySelector('ioss-ui').shadowRoot.querySelector('input[aria-label="Enable Reddit: remove login wall"]');
@@ -337,6 +337,73 @@ await test('shortlinks: excluded on banking/major sites', {
   await page.goto('https://www.paypal.com/signin');
   await sleep(1500);
   assert(page.url().startsWith('https://www.paypal.com/'), 'stayed on paypal');
+});
+
+// Logged-out Instagram: a login wall appears after scrolling, a sign-up
+// banner sits at the bottom, and a post viewer modal must stay usable.
+const IG_PROFILE = html(`
+  <a id="post" href="/p/POST1/">post</a> <a id="reel" href="/reel/REEL1/">reel</a> <a id="other" href="/explore/">explore</a>
+  <div id="banner" style="position:fixed;bottom:0;left:0;right:0;height:60px"><a href="/accounts/login/">Log in</a> to see more</div>
+  <div id="postmodal" style="position:fixed;inset:0"><div role="dialog"><article><img></article><a href="/accounts/login/">Log in to like</a></div></div>
+  <script>
+    document.getElementById('postmodal').remove(); // added later by the test
+    setTimeout(() => {
+      document.body.style.overflow = 'hidden';
+      const wrap = document.createElement('div');
+      wrap.id = 'wall';
+      wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6)';
+      wrap.innerHTML = '<div role="dialog"><form id="loginForm"><input name="username"><input name="password"></form><a href="/accounts/emailsignup/">Sign up</a></div>';
+      document.body.appendChild(wrap);
+    }, 300);
+  </script>`);
+
+await test('instagram: hides the login wall, unlocks scrolling, keeps post viewers', {
+  routes: { 'https://www.instagram.com/': IG_PROFILE }
+}, async ({ page }) => {
+  await page.goto('https://www.instagram.com/someone/');
+  await until(() => page.evaluate(() => { const w = document.getElementById('wall'); return w && getComputedStyle(w).display === 'none'; }), 4000, 'wall hidden');
+  const r = await page.evaluate(() => {
+    const m = document.createElement('div');
+    m.id = 'postmodal';
+    m.style.cssText = 'position:fixed;inset:0';
+    m.innerHTML = '<div role="dialog"><article><img></article><a href="/accounts/login/">Log in to like</a></div>';
+    document.body.appendChild(m);
+    return { overflow: document.body.style.overflow, banner: getComputedStyle(document.getElementById('banner')).display, wallInDom: !!document.getElementById('wall') };
+  });
+  assert(r.overflow === '', 'scroll unlocked: ' + r.overflow);
+  assert(r.banner === 'none', 'bottom login banner hidden');
+  assert(r.wallInDom, 'wall hidden, not removed (React-safe)');
+  await sleep(800);
+  assert(await page.evaluate(() => getComputedStyle(document.getElementById('postmodal')).display !== 'none'), 'post viewer left alone');
+});
+
+await test('instagram: post & reel links open as full pages', {
+  routes: { 'https://www.instagram.com/': IG_PROFILE }
+}, async ({ page }) => {
+  await page.goto('https://www.instagram.com/someone/');
+  // Simulate Instagram's SPA handler, which would otherwise open the
+  // login-gated in-feed viewer.
+  await page.evaluate(() => document.addEventListener('click', (e) => { if (e.target.closest('a')) { e.preventDefault(); window.__spa = true; } }));
+  await page.tap('#reel');
+  await until(() => page.url() === 'https://www.instagram.com/reel/REEL1/', 4000, 'full navigation to reel');
+  assert(!(await page.evaluate(() => window.__spa)), 'SPA handler bypassed');
+  await page.goto('https://www.instagram.com/someone/');
+  await page.evaluate(() => document.addEventListener('click', (e) => { if (e.target.closest('a')) { e.preventDefault(); window.__spa = true; } }));
+  await page.tap('#other');
+  await sleep(500);
+  assert(await page.evaluate(() => window.__spa === true) && page.url().endsWith('/someone/'), 'other links untouched');
+});
+
+await test('instagram: close-button mode', {
+  routes: { 'https://www.instagram.com/': IG_PROFILE },
+  store: { 'ioss:state': JSON.stringify({ modules: { instagram: { settings: { autoClose: false } } }, core: { welcomed: true } }) }
+}, async ({ page }) => {
+  await page.goto('https://www.instagram.com/someone/');
+  await until(() => page.$('#wall .ioss-ig-close'), 4000, 'close button');
+  const box = await (await page.$('#wall .ioss-ig-close')).boundingBox();
+  assert(box.width >= 44 && box.height >= 44 && box.x + box.width <= 375, 'button is 44pt and on screen: ' + JSON.stringify(box));
+  await page.tap('#wall .ioss-ig-close');
+  await until(() => page.evaluate(() => getComputedStyle(document.getElementById('wall')).display === 'none' && document.body.style.overflow === ''), 2000, 'closed');
 });
 
 await test('downloader: Instagram picks the reel that is on screen', {

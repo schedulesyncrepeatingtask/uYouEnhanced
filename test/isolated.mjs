@@ -64,6 +64,10 @@ const routes = {
       <like-button-view-model><button aria-pressed="false"><span role="text">1K</span></button></like-button-view-model>
       <dislike-button-view-model><button aria-pressed="false"><span role="text"></span></button></dislike-button-view-model></div></div>
     <ytm-promoted-sparkles-web-renderer id="ad1">Ad</ytm-promoted-sparkles-web-renderer>`),
+  'https://www.instagram.com/': page(`<a id="reel" href="/reel/R1/">reel</a>
+    <script nonce="n0nce">document.addEventListener('click', (e) => { if (e.target.closest('a')) { e.preventDefault(); window.__spa = 1; } });
+      setTimeout(() => { document.body.style.overflow = 'hidden'; const w = document.createElement('div'); w.id = 'wall'; w.style.cssText = 'position:fixed;inset:0';
+        w.innerHTML = '<div role="dialog"><input name="username"><a href="/accounts/emailsignup/">Sign up</a></div>'; document.body.appendChild(w); }, 200);</script>`),
   'https://returnyoutubedislikeapi.com/votes': cors(JSON.stringify({ likes: 1000, dislikes: 4321 }))
 };
 
@@ -115,6 +119,13 @@ try {
   check(/4\.3K/.test(y.dislikes), 'youtube: dislikes fetched via GM.xmlHttpRequest and shown', y.dislikes);
   check(y.pip, 'youtube: PiP button inserted');
   check(y.ad === 'none', 'youtube: promoted ad hidden');
+
+  await p.goto('https://www.instagram.com/someone/');
+  await sleep(1000);
+  const ig = await p.evaluate(() => ({ wall: getComputedStyle(document.getElementById('wall')).display, overflow: document.body.style.overflow }));
+  check(ig.wall === 'none' && ig.overflow === '', 'instagram: login wall hidden from the sandbox', JSON.stringify(ig));
+  await p.click('#reel');
+  await p.waitForURL('https://www.instagram.com/reel/R1/', { timeout: 4000 }).then(() => check(true, 'instagram: reel opened as a full page before the site handler'), () => check(false, 'instagram: reel opened', p.url()));
 
   await p.goto('https://short.example/abc');
   await p.waitForURL('https://dest.example/ok', { timeout: 5000 }).then(() => check(true, 'shortlinks: go-link followed without page jQuery'), () => check(false, 'shortlinks: go-link followed', p.url()));

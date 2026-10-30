@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iOS Userscript Suite
 // @namespace    https://github.com/schedulesyncrepeatingtask/uYouEnhanced
-// @version      1.0.0
+// @version      1.1.0
 // @description  All-in-one Safari suite tuned for iPhone 13 mini: YouTube ad skipping, SponsorBlock, dislikes, Picture-in-Picture, video downloader, Google anti-tracking and cookie-banner rejection, Reddit login-wall removal and shortlink bypassing. Every module updates itself.
 // @author       iOS Userscript Suite contributors (see README for the original authors)
 // @license      AGPL-3.0-or-later

@@ -1,6 +1,6 @@
 # iOS Userscript Suite
 
-One Safari userscript for iPhone that combines and fixes nine popular userscripts. It's tuned for the
+One Safari userscript for iPhone that combines and fixes ten popular userscripts. It's tuned for the
 **iPhone 13 mini** (375 pt wide screen, notch, home indicator, Safari's bottom tab bar), and **every
 module updates itself**.
 
@@ -9,6 +9,7 @@ module updates itself**.
 | Reject cookie banners | Google: Block Cookie Banner 2.0 | Rejects Google's and YouTube's consent dialogs before they appear |
 | Don't Track Me Google | Don't Track Me Google 2.2.2 | Cleans result links, removes ping/click tracking and beacons, can force SafeSearch off |
 | Reddit: remove login wall | Remove Reddit Login Requirement 1.0.12 | Removes NSFW/login/"open the app" walls, un-blurs, re-enables scrolling |
+| Instagram: browse without logging in | Browse Instagram Without Logging In 1.0 | Hides the login/sign-up wall and bottom banner, re-enables scrolling, opens posts and reels as full pages |
 | YouTube: remove ads | youtube-adb 6.21 | Hides feed/search/banner ads, skips video ads, removes the ad-blocker pop-up |
 | SponsorBlock | Simple Sponsor Skipper 2026.03 | Skips sponsors, intros and other segments (with an **Undo** button) |
 | Return YouTube Dislike | Return YouTube Dislike 3.2.0-ios | Shows dislike counts on m.youtube.com, the desktop site and Shorts |
@@ -25,7 +26,7 @@ module updates itself**.
 3. In Safari, open
    `https://raw.githubusercontent.com/schedulesyncrepeatingtask/uYouEnhanced/main/dist/ios-userscript-suite.user.js`
    and confirm the install in the extension's prompt (tap the **puzzle-piece** icon in the address bar).
-4. Remove the nine original scripts so that nothing runs twice.
+4. Remove the original scripts so that nothing runs twice.
 
 ### Settings
 
@@ -64,6 +65,17 @@ itself, which is the same trust you give any auto-updating userscript.
 - It used to write `style="undefined"` onto elements.
 - It now runs at most once per frame instead of on every DOM change.
 - Un-blurring runs in the page itself, where Reddit's own functions are reachable.
+
+**Instagram (Browse Without Logging In)**
+- It looked for the pop-up by 2020-era class names (`RnEpo _Yhr4`) that Instagram no longer uses, so it no longer
+  found anything. The wall is now recognised by its login form or sign-up link, and post viewers are left alone.
+- It reassigned `onclick` on every link in a `setInterval(…, 0)` loop, hundreds of times a second, which is a
+  constant battery drain. One click listener now does the same, and covers reels as well as posts.
+- It re-added its close button and a new resize listener every 500 ms. The button was 30 px, placed for a 400 px
+  desktop dialog.
+- It deleted nodes that Instagram's React code still manages, which can crash the page. The wall is now hidden
+  instead. By default it closes automatically; a 44 pt ✕ button (like the original) is available in the options.
+- It now also hides the "Log in to see more" banner at the bottom.
 
 **Simple Sponsor Skipper**
 - It assigned `this.GM…` inside strict mode. On Safari, which has no menu commands, that threw an error and the
@@ -177,6 +189,7 @@ This suite contains modified versions of:
 - **Don't Track Me Google** by Rob Wu / KTZ (MIT)
 - **youtube-adb** by iamfugui (MIT)
 - **Remove Reddit Login Requirement** by SoCuul (MIT)
+- **Browse Instagram Without Logging In** by dankdave69
 - **All-in-One Video Downloader** by Daniel (MIT)
 - **Bypass All Shortlinks** by Bloggerpemula, with thanks to @JustOlaf, @Konf, @hacker09, @juansi, @NotYou,
   @cunaqr, @Rust1667 and @varram (bloggerpemula.pythonanywhere.com)

@@ -1,5 +1,5 @@
 {
-  "suite": "1.0.0",
+  "suite": "1.1.0",
   "api": 1,
   "modules": {
     "google-consent": {
@@ -22,6 +22,13 @@
       "api": 1,
       "file": "reddit.js",
       "sha256": "37544b623d99a3c8bcbb57aa2bd240b14604531189aa39e897e954fbc6f4aded"
+    },
+    "instagram": {
+      "name": "Instagram: browse without logging in",
+      "version": "1.1.0",
+      "api": 1,
+      "file": "instagram.js",
+      "sha256": "65256798114b52eca96c24777f4e8fec9f9c5e000bd4dbcbd2554c250e3ff4bb"
     },
     "yt-adblock": {
       "name": "YouTube: remove ads",
