@@ -280,11 +280,52 @@ await test('youtube (m.): PiP button, ad hiding, ad skip, dislikes, SponsorBlock
   assert(await page.evaluate(() => document.querySelector('video').muted), 'ad muted');
   await page.evaluate(() => document.getElementById('movie_player').classList.remove('ad-showing'));
   await until(() => page.evaluate(() => !document.querySelector('video').muted && document.querySelector('video').playbackRate === 1), 3000, 'mute/rate restored');
-  // Download button
-  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'download button');
-  await page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.fab.show').click());
+  // Download button: in the action bar, directly left of the like button
+  const order = await until(() => page.evaluate(() => {
+    const row = document.querySelector('.slim-video-action-bar-actions');
+    const dl = row.querySelector(':scope > .ioss-yt-dl');
+    return dl && Array.from(row.children).map((c) => c.className || c.tagName.toLowerCase());
+  }), 4000, 'inline download button');
+  assert(order[0] === 'ioss-yt-dl' && order[1] === 'segmented-buttons', 'left of like: ' + JSON.stringify(order));
+  const dlBox = await (await page.$('.ioss-yt-dl')).boundingBox();
+  assert(dlBox.width >= 44 && dlBox.height >= 36, 'tap target: ' + JSON.stringify(dlBox));
+  await sleep(2200);
+  assert((await ui('.fab.show')).length === 0, 'floating button hidden on watch pages');
+  await page.tap('.ioss-yt-dl');
   await until(() => opened.length > 0, 2000, 'download opened');
   assert(opened[0].startsWith('https://www.tool77.com/') && opened[0].includes(encodeURIComponent(`https://www.youtube.com/watch?v=${VIDEO_ID}`)), 'download url: ' + opened[0]);
+  // Dislikes still land on the dislike button, not on ours.
+  assert(/1\.2K/.test(await page.evaluate(() => document.querySelector('dislike-button-view-model span[role=text]').textContent)), 'dislikes intact');
+});
+
+await test('youtube: download button + dislikes when like/dislike sit directly in the row', {
+  routes: { 'https://m.youtube.com/watch': html(`
+    <div id="player"><div id="movie_player" class="html5-video-player"><video class="html5-main-video"></video></div></div>
+    <div class="slim-video-action-bar-actions">
+      <like-button-view-model><button aria-pressed="false"><span role="text">1K</span></button></like-button-view-model>
+      <dislike-button-view-model><button aria-pressed="false"><span role="text"></span></button></dislike-button-view-model>
+      <ytm-button-renderer id="share"><button>Share</button></ytm-button-renderer>
+    </div>`) },
+  xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: JSON.stringify({ likes: 10, dislikes: 2345 }) } }
+}, async ({ page }) => {
+  await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+  const order = await until(() => page.evaluate(() => {
+    const row = document.querySelector('.slim-video-action-bar-actions');
+    return row.querySelector(':scope > .ioss-yt-dl') && Array.from(row.children).map((c) => c.className || c.tagName.toLowerCase());
+  }), 4000, 'inline button');
+  assert(order.join() === 'ioss-yt-dl,like-button-view-model,dislike-button-view-model,ytm-button-renderer', 'order: ' + order);
+  await until(() => page.evaluate(() => /2\.3K/.test(document.querySelector('dislike-button-view-model span[role=text]').textContent)), 6000, 'dislike count on the dislike button');
+  assert(!(await page.evaluate(() => document.querySelector('.ioss-yt-dl').textContent.match(/\d/))), 'nothing written into the download button');
+});
+
+await test('youtube: Shorts keep the floating download button', {
+  routes: { 'https://m.youtube.com/shorts': html('<video style="width:300px;height:500px"></video>') }
+}, async ({ page, ui, opened }) => {
+  await page.goto('https://m.youtube.com/shorts/abcdefghijk');
+  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'floating button on Shorts');
+  await page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.fab.show').click());
+  await until(() => opened.length > 0, 2000, 'opened');
+  assert(opened[0].includes(encodeURIComponent('https://www.youtube.com/shorts/abcdefghijk')), 'shorts url: ' + opened[0]);
 });
 
 await test('youtube: no download button on the home feed', {

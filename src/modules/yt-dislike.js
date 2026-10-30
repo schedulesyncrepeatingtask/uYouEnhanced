@@ -1,7 +1,7 @@
 ({
   id: 'yt-dislike',
   name: 'Return YouTube Dislike',
-  version: '3.2.1',
+  version: '3.2.2',
   api: 1,
   source: 'Return YouTube Dislike 3.2.0-ios (Anarios & JRWR)',
   description: 'Shows dislike counts again (watch pages and Shorts, mobile and desktop) using the returnyoutubedislike.com API, and anonymously contributes your own likes/dislikes.',
@@ -1257,7 +1257,7 @@ function getDislikeButton() {
       buttons.querySelector(SYNTHETIC_SHORTS_DISLIKE_SELECTOR)
     );
   }
-  const firstButton = buttons?.children?.[0];
+  const firstButton = ownChildren(buttons)[0];
   if (!firstButton) {
     return null;
   }
@@ -1274,14 +1274,21 @@ function getDislikeButton() {
       if (!dislikeViewModel) cLog("Dislike button wasn't added to DOM yet...");
       return dislikeViewModel;
     } else {
-      return buttons.children[1] ?? null;
+      return ownChildren(buttons)[1] ?? null;
     }
   }
 }
 
+// Suite: the downloader puts its button in front of the like button. Skip
+// elements the suite owns so the like/dislike buttons are still found by
+// position.
+function ownChildren(buttons) {
+  return Array.from(buttons?.children ?? []).filter((child) => !child.hasAttribute("data-ioss-owned"));
+}
+
 function getLikeButton() {
   const buttons = getButtons();
-  const firstButton = buttons?.children?.[0];
+  const firstButton = ownChildren(buttons)[0];
   if (!firstButton) {
     return null;
   }

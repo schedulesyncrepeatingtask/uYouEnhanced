@@ -124,6 +124,9 @@ itself, which is the same trust you give any auto-updating userscript.
   an iPhone nothing showed.
 - It's now a 44 pt floating button that picks the video currently on screen, plus inline buttons on X and
   Threads. Long-press the button to copy the link.
+- On YouTube watch pages the button sits in the action bar, left of the like button, styled like YouTube's own
+  pills (light and dark). Shorts keep the floating button. Return YouTube Dislike skips it when locating the
+  like/dislike buttons.
 - It loaded three external libraries (StreamSaver, CryptoJS, JSEncrypt). Two were never used and StreamSaver
   doesn't work on iOS. All three are gone.
 - Direct video files are saved through the iOS share sheet (**Save Video**).
