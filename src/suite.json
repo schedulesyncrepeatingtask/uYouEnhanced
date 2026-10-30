@@ -1,0 +1,8 @@
+{
+  "name": "iOS Userscript Suite",
+  "file": "ios-userscript-suite",
+  "version": "1.0.0",
+  "api": 1,
+  "repo": "schedulesyncrepeatingtask/uYouEnhanced",
+  "branch": "main"
+}

@@ -1,0 +1,15 @@
+{
+  "name": "ios-userscript-suite",
+  "private": true,
+  "description": "All-in-one Safari userscript suite for iPhone with per-module auto-updates",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node build.mjs --check",
+    "test": "node test/run.mjs && node test/isolated.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
