@@ -1,5 +1,5 @@
 {
-  "suite": "1.3.0",
+  "suite": "1.4.0",
   "api": 1,
   "modules": {
     "google-consent": {
@@ -92,6 +92,13 @@
       "api": 1,
       "file": "web-limits.js",
       "sha256": "cb2a03b7be15666e33d7f1ff9c4159abee3326e7c2952f09e35f9ffcac0ec2d3"
+    },
+    "clean-urls": {
+      "name": "Clean tracking URLs",
+      "version": "0.8.0",
+      "api": 1,
+      "file": "clean-urls.js",
+      "sha256": "9d03c3bf4eb67403f775b43e28e038b64829c3bfb230e3587c6b16a9d9d91207"
     }
   }
 }

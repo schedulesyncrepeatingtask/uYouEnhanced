@@ -1,6 +1,6 @@
 # iOS Userscript Suite
 
-One Safari userscript for iPhone that combines and fixes thirteen popular userscripts. It's tuned for the
+One Safari userscript for iPhone that combines and fixes fourteen popular userscripts. It's tuned for the
 **iPhone 13 mini** (375 pt wide screen, notch, home indicator, Safari's bottom tab bar), and **every
 module updates itself**.
 
@@ -18,6 +18,7 @@ module updates itself**.
 | Video downloader | All-in-One Video Downloader 1.0.19 | Download button for YouTube, TikTok, Instagram, X, Threads, Facebook, Pinterest, Snapchat, TED, Spotify and more |
 | Dark Mode | Dark Mode 护眼模式 1.5.8 | Dims, warms or inverts every site; skips sites that are already dark; can follow the iPhone's Dark Mode and switch by time of day |
 | Remove web limits | Remove web limits 网页限制解除 1.3 | Lets you select and copy text and use the long-press menu on sites that block it |
+| Clean tracking URLs | Clean Tracking URLs 跟踪链接净化 0.7.8 | Strips tracking parameters from links and the address bar, with extra rules for Bilibili, Baidu, CSDN, Taobao/Alibaba, Douyin/TikTok, Amazon, YouTube, Google, Reddit, LinkedIn, eBay, JD and more |
 | Bypass All Shortlinks | Bypass All Shortlinks 96.8 | Skips link-shortener waiting pages and has optional anti-annoyance tools |
 
 ## Install on iPhone
@@ -97,6 +98,26 @@ itself, which is the same trust you give any auto-updating userscript.
 - It wrote into `<head>` at document-start, where it might not exist yet, and could crash.
 - Sites that need their own copy handling (Google Docs, Notion, GitHub, Office, Figma, …) are excluded by default;
   the list is editable.
+
+**Clean tracking URLs**
+- It removed `ref`, `from`, `source`, `src`, `redir`, `alias`, `brand`, … on every site, which broke GitHub
+  `?ref=<branch>` links, flight searches (`from=JFK`), date ranges and sign-in redirects. Only clearly-tracking
+  parameters are removed by default now; the original's list is the "Aggressive" option. Its per-site lists are
+  kept, minus a few functional ones (Google `hl`/`sig`, Baidu/Tieba `page`/`type`/`u`/`ie`, YouTube `redir_token`,
+  which external links in video descriptions need).
+- Cleaning the address bar replaced `history.state` with `{}`, which can break Back on single-page sites, and it
+  also rewrote sign-in/OAuth return URLs. The state is kept now, and sign-in pages are left alone.
+- It re-encoded every remaining parameter, garbling GBK searches on Chinese sites. Parameters are now removed from
+  the raw text, leaving the rest byte-for-byte unchanged.
+- It called the synchronous `GM_getValue` (crashes in the Userscripts app) and patched `history` from the sandbox,
+  so single-page navigation was never noticed on iPhone.
+- It attached four listeners to every `<div>` with a class (often thousands), re-cleaned on mouse movement, and
+  overwrote the site's `window.onscroll`. Now: one batched observer and one tap handler.
+- Bugs fixed: the Google fragment cleaner removed 8 items at a time while looping; the Bilibili code crashed on
+  missing elements and injected a login link whose handler couldn't run; the Bilibili live pop-up timer never ran;
+  the YouTube right-click code crashed on m.youtube and added a listener per right-click.
+- Dropped (desktop-only): the Bilibili "copy link with exact time" share helper and the YouTube player right-click
+  copy rewrite.
 
 **Google Lite**
 - Its telemetry budget started at 0 and the refill timer only started once a request got through, so it never
@@ -237,6 +258,7 @@ This suite contains modified versions of:
 - **Google Lite 谷歌系轻量化** (MIT)
 - **Dark Mode 护眼模式** by X.I.U (GPL-3.0)
 - **Remove web limits 网页限制解除** by Cat73 (LGPL-3.0)
+- **Clean Tracking URLs 跟踪链接净化** by cilxe
 - **All-in-One Video Downloader** by Daniel (MIT)
 - **Bypass All Shortlinks** by Bloggerpemula, with thanks to @JustOlaf, @Konf, @hacker09, @juansi, @NotYou,
   @cunaqr, @Rust1667 and @varram (bloggerpemula.pythonanywhere.com)
