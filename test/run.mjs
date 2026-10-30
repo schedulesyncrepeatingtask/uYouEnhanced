@@ -312,6 +312,26 @@ await test('settings sheet opens with #suite and saves toggles', {
   assert(fontSize === '16px', 'inputs are 16px (no iOS zoom on focus): ' + fontSize);
 });
 
+// YouTube (and other single-page apps) rewrite the address as soon as their
+// scripts run, which drops "#suite" before the page has finished loading.
+const STRIPS_HASH = html(`<script>
+  history.replaceState(null, '', location.pathname + location.search);
+  window.addEventListener('hashchange', () => history.replaceState(null, '', location.pathname + location.search));
+</script><p>spa</p>`);
+
+await test('settings sheet opens on sites that strip #suite (YouTube)', {
+  routes: { 'https://m.youtube.com/': STRIPS_HASH }
+}, async ({ page }) => {
+  const sheetOpen = () => page.evaluate(() => !!document.querySelector('ioss-ui') && !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet'));
+  await page.goto('https://m.youtube.com/#suite');
+  await until(sheetOpen, 4000, 'sheet on load');
+  // Close it, then add #suite to the already-open page.
+  await page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.backdrop').click());
+  assert(!(await sheetOpen()), 'closed');
+  await page.evaluate(() => { location.hash = 'suite'; });
+  await until(sheetOpen, 4000, 'sheet after adding #suite');
+});
+
 await test('shortlinks: AdLinkFly go-link page is followed as soon as the link is ready', {
   routes: {
     'https://short.example/': html(`<form id="go-link" action="/links/go"></form><a class="get-link btn disabled" href="javascript:void(0)">Please wait</a>
