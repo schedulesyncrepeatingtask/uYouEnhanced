@@ -318,6 +318,52 @@ await test('youtube: download button + dislikes when like/dislike sit directly i
   assert(!(await page.evaluate(() => document.querySelector('.ioss-yt-dl').textContent.match(/\d/))), 'nothing written into the download button');
 });
 
+// YouTube's 2026 mobile watch page (from a user screenshot): dark theme, one
+// row holding the channel avatar, the Subscribe pill and icon-only actions.
+const MYT_2026 = html(`
+  <style>
+    body { background: #0f0f0f; color: #f1f1f1; margin: 0; }
+    .slim-video-action-bar-actions { display: flex; align-items: center; gap: 8px; padding: 0 12px; }
+    /* Like YouTube: native buttons are styled by their own class, so a
+       foreign button in the row inherits nothing from these rules. */
+    .yt-btn { background: transparent; border: 0; color: rgb(241, 241, 241); width: 44px; height: 44px; }
+    #sub .yt-btn { background: #272727; width: auto; border-radius: 18px; padding: 0 14px; }
+  </style>
+  <div id="player"><div id="movie_player" class="html5-video-player" style="height:211px;background:#000"><video class="html5-main-video"></video></div></div>
+  <ytm-slim-video-action-bar-renderer><div class="slim-video-action-bar-actions">
+    <ytm-channel-thumbnail-with-link-renderer id="avatar"><a href="/@channel"><img alt=""></a></ytm-channel-thumbnail-with-link-renderer>
+    <ytm-subscribe-button-renderer id="sub"><button class="yt-btn"><span role="text">Abonnieren</span></button></ytm-subscribe-button-renderer>
+    <like-button-view-model><button class="yt-btn" aria-label="Mag ich"></button></like-button-view-model>
+    <dislike-button-view-model><button class="yt-btn" aria-label="Mag ich nicht"></button></dislike-button-view-model>
+    <ytm-button-renderer id="share"><button class="yt-btn" aria-label="Teilen"></button></ytm-button-renderer>
+  </div></ytm-slim-video-action-bar-renderer>`);
+
+await test('youtube 2026 layout: dislikes on the dislike button (not Subscribe), visible download button', {
+  routes: { 'https://m.youtube.com/watch': MYT_2026 },
+  xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: JSON.stringify({ likes: 211, dislikes: 3 }) } }
+}, async ({ page, opened }) => {
+  await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+  await until(() => page.evaluate(() => /3/.test(document.querySelector('dislike-button-view-model').textContent)), 6000, 'dislike count on the dislike button');
+  await sleep(1200); // let the 500 ms mobile re-write loop run a few times
+  const r = await page.evaluate(() => {
+    const dl = document.querySelector('.ioss-yt-dl');
+    const like = document.querySelector('like-button-view-model button');
+    return {
+      sub: document.querySelector('#sub').textContent.trim(),
+      order: Array.from(document.querySelector('.slim-video-action-bar-actions').children).map((c) => c.id || c.className || c.tagName.toLowerCase()),
+      dlColor: dl && getComputedStyle(dl).color,
+      likeColor: getComputedStyle(like).color,
+      dlBg: dl && getComputedStyle(dl).backgroundColor
+    };
+  });
+  assert(r.sub === 'Abonnieren', 'Subscribe label untouched: ' + r.sub);
+  assert(r.order.join() === 'avatar,sub,ioss-yt-dl ioss-yt-dl-icon,like-button-view-model,dislike-button-view-model,share', 'order: ' + r.order);
+  assert(r.dlColor === r.likeColor, `download icon uses the like button colour (${r.dlColor} vs ${r.likeColor})`);
+  assert(r.dlBg === 'rgba(0, 0, 0, 0)', 'icon-only like the other actions: ' + r.dlBg);
+  await page.tap('.ioss-yt-dl');
+  await until(() => opened.length > 0, 2000, 'download opened');
+});
+
 await test('youtube: Shorts keep the floating download button', {
   routes: { 'https://m.youtube.com/shorts': html('<video style="width:300px;height:500px"></video>') }
 }, async ({ page, ui, opened }) => {
