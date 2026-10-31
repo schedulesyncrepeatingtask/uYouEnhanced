@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iOS Userscript Suite
 // @namespace    https://github.com/schedulesyncrepeatingtask/uYouEnhanced
-// @version      1.4.0
+// @version      1.4.1
 // @description  All-in-one Safari suite tuned for iPhone 13 mini: YouTube ad skipping, SponsorBlock, dislikes, Picture-in-Picture, video downloader, Google anti-tracking and cookie-banner rejection, Reddit login-wall removal and shortlink bypassing. Every module updates itself.
 // @author       iOS Userscript Suite contributors (see README for the original authors)
 // @license      AGPL-3.0-or-later
@@ -49,7 +49,7 @@
    * modules without waiting for a full userscript update.
    * ==================================================================== */
 
-  const SUITE = {"name":"iOS Userscript Suite","version":"1.4.0","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
+  const SUITE = {"name":"iOS Userscript Suite","version":"1.4.1","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
   const RAW = `https://raw.githubusercontent.com/${SUITE.repo}/${SUITE.branch}/dist/`;
   const STATE_KEY = 'ioss:state';
   const CODE_KEY = (id) => `ioss:code:${id}`;
@@ -2122,11 +2122,11 @@
   }
 }));
 
-  /* ---- module: yt-dislike v3.2.2 ---- */
+  /* ---- module: yt-dislike v3.2.3 ---- */
   register(({
   id: 'yt-dislike',
   name: 'Return YouTube Dislike',
-  version: '3.2.2',
+  version: '3.2.3',
   api: 1,
   source: 'Return YouTube Dislike 3.2.0-ios (Anarios & JRWR)',
   description: 'Shows dislike counts again (watch pages and Shorts, mobile and desktop) using the returnyoutubedislike.com API, and anonymously contributes your own likes/dislikes.',
@@ -3399,7 +3399,26 @@ function getDislikeButton() {
       if (!dislikeViewModel) cLog("Dislike button wasn't added to DOM yet...");
       return dislikeViewModel;
     } else {
-      return ownChildren(buttons)[1] ?? null;
+      // Suite: YouTube's 2026 mobile watch page puts the channel avatar and
+      // the Subscribe button in the same row as like/dislike. The upstream
+      // "second child of the row" guess then pointed at Subscribe, and its
+      // label was overwritten with the dislike count. Find the dislike
+      // control by name, else take the control right after the like button.
+      const named = buttons.querySelector("dislike-button-view-model, ytm-dislike-button-renderer, #dislike-button");
+      if (named) {
+        return named;
+      }
+      const likeControl = getLikeButton();
+      if (likeControl?.matches?.("like-button-view-model, ytm-like-button-renderer, #like-button")) {
+        let next = likeControl.nextElementSibling;
+        while (next?.hasAttribute("data-ioss-owned")) {
+          next = next.nextElementSibling;
+        }
+        if (next) {
+          return next;
+        }
+      }
+      return isMobile ? null : ownChildren(buttons)[1] ?? null;
     }
   }
 }
@@ -3418,11 +3437,15 @@ function getLikeButton() {
     return null;
   }
 
-  return firstButton.tagName === "YTD-SEGMENTED-LIKE-DISLIKE-BUTTON-RENDERER"
-    ? buttons.querySelector("#segmented-like-button") !== null
+  if (firstButton.tagName === "YTD-SEGMENTED-LIKE-DISLIKE-BUTTON-RENDERER") {
+    return buttons.querySelector("#segmented-like-button") !== null
       ? buttons.querySelector("#segmented-like-button")
-      : firstButton.children[0]
-    : buttons.querySelector("like-button-view-model") ?? firstButton;
+      : firstButton.children[0];
+  }
+  // Suite: on mobile the first item of the row can be the channel avatar,
+  // so only accept a control that is actually a like button there.
+  const namedLike = buttons.querySelector("like-button-view-model, ytm-like-button-renderer, #like-button");
+  return namedLike ?? (isMobile ? null : firstButton);
 }
 
 function getLikeTextContainer() {
@@ -5170,11 +5193,11 @@ function writeMobileDislikes() {
   }
 }));
 
-  /* ---- module: downloader v1.2.0 ---- */
+  /* ---- module: downloader v1.2.1 ---- */
   register(({
   id: 'downloader',
   name: 'Video downloader',
-  version: '1.2.0',
+  version: '1.2.1',
   api: 1,
   source: 'All-in-One Video Downloader 1.0.19 (Daniel)',
   description: 'Adds a download button for videos on YouTube, YouTube Music, TikTok, Instagram, X/Twitter, Threads, Facebook, Pinterest, Snapchat, TED, Douyin, Xiaohongshu and Spotify. Tapping it opens the downloader service with the current video. Opening a direct video file shows a Save button.',
@@ -5375,6 +5398,7 @@ function writeMobileDislikes() {
       const existing = row.querySelector(':scope > .ioss-yt-dl');
       if (existing) {
         if (existing.nextElementSibling !== slot) row.insertBefore(existing, slot);
+        matchNative(existing, like);
         return existing;
       }
       const btn = api.el('button', {
@@ -5393,8 +5417,23 @@ function writeMobileDislikes() {
       btn.addEventListener('touchend', (e) => { if (pressTimer === -1) e.preventDefault(); clearTimeout(pressTimer); pressTimer = 0; });
       btn.addEventListener('touchmove', () => { clearTimeout(pressTimer); pressTimer = 0; }, { passive: true });
       row.insertBefore(btn, slot);
+      matchNative(btn, like);
       return btn;
     };
+    // Fix: the button used YouTube's theme variables, which the 2026 mobile
+    // layout no longer sets where we looked, so it rendered dark-on-dark and
+    // was practically invisible. It now copies the like button's own colour,
+    // background and height (icon-only in the new layout, a pill in the old).
+    function matchNative(btn, like) {
+      const native = like.querySelector('button') || like;
+      const st = getComputedStyle(native);
+      const iconOnly = /^(transparent|rgba\(0, 0, 0, 0\))$/.test(st.backgroundColor);
+      btn.classList.toggle('ioss-yt-dl-icon', iconOnly);
+      btn.style.setProperty('color', st.color, 'important');
+      btn.style.setProperty('background', iconOnly ? 'transparent' : st.backgroundColor, 'important');
+      const h = Math.round(native.getBoundingClientRect().height);
+      if (h >= 28 && h <= 64) btn.style.setProperty('height', h + 'px', 'important');
+    }
     if (cfg.ytInline && /(^|\.)(m|www)\.youtube\.com$/.test(host)) {
       api.addStyle(`
         .ioss-yt-dl { flex: none; display: inline-flex; align-items: center; justify-content: center; height: 36px; min-width: 44px;
@@ -5404,6 +5443,8 @@ function writeMobileDislikes() {
         html[dark] .ioss-yt-dl, [dark] .ioss-yt-dl { color: var(--yt-spec-text-primary, #f1f1f1); background: var(--yt-spec-badge-chip-background, rgba(255,255,255,.1)); }
         .ioss-yt-dl:active { opacity: .6; }
         .ioss-yt-dl svg { width: 22px; height: 22px; pointer-events: none; }
+        .ioss-yt-dl.ioss-yt-dl-icon { padding: 0; width: 44px; margin: 0 2px; border-radius: 50%; }
+        .ioss-yt-dl.ioss-yt-dl-icon svg { width: 24px; height: 24px; }
       `, 'ioss-yt-dl-css');
       inlineYouTube();
       api.observe(document.body, { childList: true, subtree: true }, inlineYouTube, { throttle: 400 });

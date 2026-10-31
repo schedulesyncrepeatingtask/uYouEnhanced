@@ -160,6 +160,9 @@ itself, which is the same trust you give any auto-updating userscript.
 - Fixed crashes when the buttons haven't rendered yet.
 - Setup polling backs off instead of running 9 times a second forever on pages without buttons.
 - Timers pause while the tab is in the background.
+- YouTube's 2026 mobile watch page puts the channel avatar and the Subscribe button in the same row as the
+  like/dislike buttons. The upstream "second item in the row" guess then overwrote the Subscribe label with the
+  dislike count. Like/dislike are now found by name (or the control right after the like button).
 
 **YouTube PiP button**
 - It kept a reference to an outdated `<video>` element after navigation; the video is now looked up when you tap.
@@ -173,7 +176,8 @@ itself, which is the same trust you give any auto-updating userscript.
 - It's now a 44 pt floating button that picks the video currently on screen, plus inline buttons on X and
   Threads. Long-press the button to copy the link.
 - On YouTube watch pages the button sits in the action bar, left of the like button, styled like YouTube's own
-  pills (light and dark). Shorts keep the floating button. Return YouTube Dislike skips it when locating the
+  pills (light and dark). Shorts keep the floating button. It copies the like button's colour, background and
+  height, so it matches both the older pill layout and the 2026 icon-only layout. Return YouTube Dislike skips it when locating the
   like/dislike buttons.
 - It loaded three external libraries (StreamSaver, CryptoJS, JSEncrypt). Two were never used and StreamSaver
   doesn't work on iOS. All three are gone.

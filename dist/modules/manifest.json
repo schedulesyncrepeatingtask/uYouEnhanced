@@ -1,5 +1,5 @@
 {
-  "suite": "1.4.0",
+  "suite": "1.4.1",
   "api": 1,
   "modules": {
     "google-consent": {
@@ -53,10 +53,10 @@
     },
     "yt-dislike": {
       "name": "Return YouTube Dislike",
-      "version": "3.2.2",
+      "version": "3.2.3",
       "api": 1,
       "file": "yt-dislike.js",
-      "sha256": "98e1f6a4aec2babf364bbc1ff4d13649d148007fa4ac23f881adcf3d94f163fe"
+      "sha256": "57b91f393bf98e1b1cdf7601b492a606edb81c8ca8cced3e97a7fdb5bc27b5d8"
     },
     "yt-player": {
       "name": "YouTube: Picture-in-Picture & player tweaks",
@@ -67,10 +67,10 @@
     },
     "downloader": {
       "name": "Video downloader",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "api": 1,
       "file": "downloader.js",
-      "sha256": "2317eac94de501f465e378584792e07817ba65ea049360bf3399890e23d595b9"
+      "sha256": "f0c4dcaae6d2c743752acf33927ef8d11a986b494789e6e708f4d49b814c1579"
     },
     "shortlinks": {
       "name": "Bypass All Shortlinks",

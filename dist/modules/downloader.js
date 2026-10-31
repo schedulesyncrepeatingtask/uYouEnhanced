@@ -1,7 +1,7 @@
 ({
   id: 'downloader',
   name: 'Video downloader',
-  version: '1.2.0',
+  version: '1.2.1',
   api: 1,
   source: 'All-in-One Video Downloader 1.0.19 (Daniel)',
   description: 'Adds a download button for videos on YouTube, YouTube Music, TikTok, Instagram, X/Twitter, Threads, Facebook, Pinterest, Snapchat, TED, Douyin, Xiaohongshu and Spotify. Tapping it opens the downloader service with the current video. Opening a direct video file shows a Save button.',
@@ -202,6 +202,7 @@
       const existing = row.querySelector(':scope > .ioss-yt-dl');
       if (existing) {
         if (existing.nextElementSibling !== slot) row.insertBefore(existing, slot);
+        matchNative(existing, like);
         return existing;
       }
       const btn = api.el('button', {
@@ -220,8 +221,23 @@
       btn.addEventListener('touchend', (e) => { if (pressTimer === -1) e.preventDefault(); clearTimeout(pressTimer); pressTimer = 0; });
       btn.addEventListener('touchmove', () => { clearTimeout(pressTimer); pressTimer = 0; }, { passive: true });
       row.insertBefore(btn, slot);
+      matchNative(btn, like);
       return btn;
     };
+    // Fix: the button used YouTube's theme variables, which the 2026 mobile
+    // layout no longer sets where we looked, so it rendered dark-on-dark and
+    // was practically invisible. It now copies the like button's own colour,
+    // background and height (icon-only in the new layout, a pill in the old).
+    function matchNative(btn, like) {
+      const native = like.querySelector('button') || like;
+      const st = getComputedStyle(native);
+      const iconOnly = /^(transparent|rgba\(0, 0, 0, 0\))$/.test(st.backgroundColor);
+      btn.classList.toggle('ioss-yt-dl-icon', iconOnly);
+      btn.style.setProperty('color', st.color, 'important');
+      btn.style.setProperty('background', iconOnly ? 'transparent' : st.backgroundColor, 'important');
+      const h = Math.round(native.getBoundingClientRect().height);
+      if (h >= 28 && h <= 64) btn.style.setProperty('height', h + 'px', 'important');
+    }
     if (cfg.ytInline && /(^|\.)(m|www)\.youtube\.com$/.test(host)) {
       api.addStyle(`
         .ioss-yt-dl { flex: none; display: inline-flex; align-items: center; justify-content: center; height: 36px; min-width: 44px;
@@ -231,6 +247,8 @@
         html[dark] .ioss-yt-dl, [dark] .ioss-yt-dl { color: var(--yt-spec-text-primary, #f1f1f1); background: var(--yt-spec-badge-chip-background, rgba(255,255,255,.1)); }
         .ioss-yt-dl:active { opacity: .6; }
         .ioss-yt-dl svg { width: 22px; height: 22px; pointer-events: none; }
+        .ioss-yt-dl.ioss-yt-dl-icon { padding: 0; width: 44px; margin: 0 2px; border-radius: 50%; }
+        .ioss-yt-dl.ioss-yt-dl-icon svg { width: 24px; height: 24px; }
       `, 'ioss-yt-dl-css');
       inlineYouTube();
       api.observe(document.body, { childList: true, subtree: true }, inlineYouTube, { throttle: 400 });
