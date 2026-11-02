@@ -1,22 +1,23 @@
 ({
   id: 'downloader',
   name: 'Video downloader',
-  version: '1.2.1',
+  version: '1.3.0',
   api: 1,
   source: 'All-in-One Video Downloader 1.0.19 (Daniel)',
-  description: 'Adds a download button for videos on YouTube, YouTube Music, TikTok, Instagram, X/Twitter, Threads, Facebook, Pinterest, Snapchat, TED, Douyin, Xiaohongshu and Spotify. Tapping it opens the downloader service with the current video. Opening a direct video file shows a Save button.',
+  description: 'Adds a download button for videos on YouTube, YouTube Music, TikTok, Instagram, X/Twitter, Threads, Facebook, Pinterest, Snapchat, TED, Douyin, Xiaohongshu and Spotify. Tapping it downloads the video and offers "Save Video" (camera roll) in the iPhone share sheet; YouTube saves up to 360p this way. Where a site does not allow that, or in website mode, it opens the downloader service instead.',
   runAt: 'ready',
   frames: false,
   SITES: /(^|\.)(youtube\.com|tiktok\.com|instagram\.com|x\.com|twitter\.com|threads\.(com|net)|facebook\.com|pinterest\.[a-z.]+|snapchat\.com|ted\.com|douyin\.com|xiaohongshu\.com|spotify\.com)$/,
   CDN: /(googlevideo\.com|tiktokcdn(-eu|-us|-af)?\.com|douyinvod\.com|fbcdn\.net|twimg\.com|zjcdn\.com|snssdk\.com|tiktokv\.com|douyinstatic\.com|xhscdn\.com|amemv\.com|tikwm\.com|douyinpic\.com|douyinmusicpromotion\.com|cdninstagram\.com|licdn\.com|sc-cdn\.net|pinimg\.com|tedcdn\.com|dmcdn\.net|tumblr\.com|rutube\.ru|uma\.media)$/,
   match: function (u) { return this.SITES.test(u.hostname) || this.CDN.test(u.hostname); },
-  defaults: { fab: true, ytInline: true, inlineX: true, service: 'tool77', copyOnLongPress: true },
+  defaults: { mode: 'save', fab: true, ytInline: true, inlineX: true, service: 'tool77', copyOnLongPress: true },
   options: [
+    { key: 'mode', type: 'select', label: 'Download button', choices: [['save', 'Save to Photos (direct; YouTube up to 360p)'], ['service', 'Open downloader website (HD)']] },
     { key: 'fab', type: 'bool', label: 'Floating download button on video pages' },
     { key: 'ytInline', type: 'bool', label: 'YouTube: download button left of the like button', help: 'Replaces the floating button on watch pages' },
     { key: 'inlineX', type: 'bool', label: 'Download button in X/Twitter & Threads posts' },
     { key: 'copyOnLongPress', type: 'bool', label: 'Long-press the button to copy the video link' },
-    { key: 'service', type: 'select', label: 'Downloader service', choices: [['tool77', 'tool77.com (original service)'], ['copy', 'Just copy the link']] }
+    { key: 'service', type: 'select', label: 'Website mode / fallback', choices: [['tool77', 'tool77.com (original service)'], ['copy', 'Just copy the link']] }
   ],
 
   run(api, cfg) {
@@ -179,10 +180,194 @@
     if (!resolver) return;
 
     const resolve = () => { try { return resolver(); } catch (e) { api.log('resolver failed', e); return null; } };
-    const act = () => {
+    const openWebsite = () => {
       const target = resolve();
       if (target && typeof target === 'object') return api.openTab(target.direct);
       openService(target);
+    };
+
+    // ------------------------------------------------------------------
+    // Save to Photos. iOS only lets web pages put a video in the camera
+    // roll through the share sheet ("Save Video"), and only from a tap, so
+    // this downloads the file first and then asks for one more tap.
+    // ------------------------------------------------------------------
+    let saving = null; // { key, blob, name } while a download is ready/running
+    const sanitize = (t) => (String(t || 'video').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'video');
+
+    async function shareFile(blob, name) {
+      const file = new File([blob], name, { type: blob.type && blob.type !== 'application/octet-stream' ? blob.type : 'video/mp4' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file] }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+      }
+      // No share sheet (e.g. desktop): regular download into Files/Downloads.
+      const a = api.el('a', { href: URL.createObjectURL(blob), download: name });
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    }
+
+    // Binary GET: page fetch first (googlevideo allows YouTube's origin),
+    // then GM.xmlHttpRequest, which is not limited by CORS.
+    async function getBytes(url) {
+      try {
+        const r = await fetch(url, { credentials: 'omit' });
+        if (r.ok) return await r.blob();
+        if (r.status === 403 || r.status === 404) throw Object.assign(new Error('HTTP ' + r.status), { fatal: true });
+      } catch (e) { if (e && e.fatal) throw e; }
+      const r = await api.request({ url, responseType: 'blob', timeout: 120000 });
+      if (r.status < 200 || r.status >= 300 || !r.response) throw new Error('HTTP ' + r.status);
+      return r.response instanceof Blob ? r.response : new Blob([r.response]);
+    }
+
+    // googlevideo serves whole files slowly; 5 MB ranges, 3 at a time.
+    async function downloadRanged(url, size, onProgress) {
+      const CHUNK = 5 * 1024 * 1024;
+      const parts = [];
+      let done = 0;
+      const ranges = [];
+      for (let start = 0; start < size; start += CHUNK) ranges.push([start, Math.min(size, start + CHUNK) - 1]);
+      let next = 0;
+      const worker = async () => {
+        while (next < ranges.length) {
+          const i = next++;
+          const [a, b] = ranges[i];
+          const sep = url.includes('?') ? '&' : '?';
+          let blob = null;
+          for (let attempt = 0; attempt < 3 && !blob; attempt++) {
+            try { blob = await getBytes(`${url}${sep}range=${a}-${b}`); } catch (e) { if (e.fatal || attempt === 2) throw e; }
+          }
+          parts[i] = blob;
+          done += blob.size;
+          onProgress(done / size);
+        }
+      };
+      await Promise.all([worker(), worker(), worker()]);
+      return new Blob(parts, { type: 'video/mp4' });
+    }
+
+    // YouTube: ask YouTube's mobile-app API for the video. App clients get
+    // direct MP4 links (the website's own links are scrambled). Only the
+    // combined video+audio files can be saved on the phone; YouTube offers
+    // those up to 360p. Higher qualities are separate video and audio
+    // streams that would need merging.
+    const YT_CLIENTS = [
+      { name: 'ANDROID_VR', id: 28, version: '1.62.27', extra: { deviceMake: 'Oculus', deviceModel: 'Quest 3', osName: 'Android', osVersion: '12L', androidSdkVersion: 32 } },
+      { name: 'IOS', id: 5, version: '20.10.4', extra: { deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.2.22D82' } }
+    ];
+    const pageValue = (key) => {
+      for (const sc of document.querySelectorAll('script:not([src])')) {
+        const m = sc.textContent.match(new RegExp('"' + key + '":"([^"]+)"'));
+        if (m) return m[1];
+      }
+      return '';
+    };
+    const pickMuxed = (resp) => {
+      const formats = ((resp && resp.streamingData && resp.streamingData.formats) || [])
+        .filter((f) => f.url && /^video\/mp4/.test(f.mimeType || ''))
+        .sort((a, b) => (b.height || 0) - (a.height || 0));
+      return formats.map((f) => ({ url: f.url, size: Number(f.contentLength) || 0, quality: f.qualityLabel || (f.height ? f.height + 'p' : ''),
+        title: resp.videoDetails && resp.videoDetails.title }));
+    };
+    async function youtubeCandidates(videoId) {
+      const out = [];
+      const visitor = pageValue('VISITOR_DATA');
+      for (const c of YT_CLIENTS) {
+        try {
+          const r = await fetch('/youtubei/v1/player?prettyPrint=false', {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json', 'X-YouTube-Client-Name': String(c.id), 'X-YouTube-Client-Version': c.version },
+              visitor ? { 'X-Goog-Visitor-Id': visitor } : {}),
+            body: JSON.stringify({
+              context: { client: Object.assign({ clientName: c.name, clientVersion: c.version, hl: document.documentElement.lang || 'en' }, c.extra, visitor ? { visitorData: visitor } : {}) },
+              videoId, contentCheckOk: true, racyCheckOk: true
+            })
+          });
+          if (r.ok) out.push(...pickMuxed(await r.json()));
+        } catch (e) { api.log('player request failed', c.name, e && e.message); }
+      }
+      // Fresh page load: the website's own player data sometimes has plain links.
+      for (const sc of document.querySelectorAll('script:not([src])')) {
+        const i = sc.textContent.indexOf('ytInitialPlayerResponse = ');
+        if (i === -1) continue;
+        try {
+          const json = sc.textContent.slice(i + 26).replace(/;\s*(var |<\/script|$)[\s\S]*/, '');
+          const resp = JSON.parse(json);
+          if (resp.videoDetails && resp.videoDetails.videoId === videoId) out.push(...pickMuxed(resp));
+        } catch (_) { /* not parseable */ }
+      }
+      return out;
+    }
+
+    async function saveDirect() {
+      const key = location.href;
+      if (saving && saving.key === key) {
+        if (saving.blob) return shareFile(saving.blob, saving.name);
+        return api.toast('Still downloading…', { timeout: 1500 });
+      }
+      const ytId = /(^|\.)youtube\.com$/.test(host) && !/(^|\.)music\.youtube\.com$/.test(host)
+        ? (new URLSearchParams(location.search).get('v') || (location.pathname.match(/^\/shorts\/([A-Za-z0-9_-]{11})/) || [])[1])
+        : null;
+      const job = { key, blob: null, name: '' };
+      saving = job;
+      const progress = api.toast('Preparing download…', { timeout: 0 });
+      const setText = (t) => progress && progress.update && progress.update(t);
+      const fail = (why) => {
+        if (saving === job) saving = null;
+        progress && progress.close();
+        api.toast(`Couldn't save this video directly${why ? ` (${why})` : ''}.`, { timeout: 9000, action: 'Open website', onAction: openWebsite });
+      };
+      try {
+        let blob = null;
+        let title = document.title.replace(/ - YouTube$/, '');
+        if (ytId) {
+          const candidates = await youtubeCandidates(ytId);
+          if (!candidates.length) return fail('YouTube did not offer a downloadable file');
+          let lastError = null;
+          for (const c of candidates) {
+            try {
+              if (c.title) title = c.title;
+              const size = c.size;
+              if (size > 800 * 1024 * 1024 && !confirm(`This video is ${(size / 1048576).toFixed(0)} MB. Saving it needs that much memory. Continue?`)) {
+                return fail('too large');
+              }
+              const label = `Downloading${c.quality ? ' ' + c.quality : ''}…`;
+              setText(`${label} 0%`);
+              blob = size
+                ? await downloadRanged(c.url, size, (p) => setText(`${label} ${Math.floor(p * 100)}%`))
+                : await getBytes(c.url);
+              break;
+            } catch (e) { lastError = e; api.log('candidate failed', e && e.message); }
+          }
+          if (!blob) return fail(lastError ? lastError.message : '');
+        } else {
+          // Other sites: the video on screen, if it plays from a real file.
+          const v = mostVisible(document.querySelectorAll('video'));
+          const src = v && (v.currentSrc || v.src || (v.querySelector('source') || {}).src);
+          if (!src || !/^https?:/i.test(src)) return fail('this site streams video in pieces');
+          setText('Downloading…');
+          blob = await getBytes(src);
+          const art = v.closest('article');
+          const caption = art && art.querySelector('h1, h2, [dir="auto"]');
+          if (caption && caption.textContent.trim()) title = caption.textContent.trim();
+        }
+        if (saving !== job) return; // navigated away / restarted
+        job.blob = blob;
+        job.name = sanitize(title) + '.mp4';
+        progress && progress.close();
+        // A fresh tap is required before iOS shows the share sheet.
+        api.toast(`Ready: ${(blob.size / 1048576).toFixed(1)} MB.\nTap Save, then "Save Video".`, {
+          timeout: 120000, action: 'Save', onAction: () => shareFile(job.blob, job.name)
+        });
+      } catch (e) {
+        fail(e && e.message);
+      }
+    }
+
+    const act = () => {
+      const target = resolve();
+      if (cfg.mode === 'service' || (target && typeof target === 'object')) return openWebsite();
+      return saveDirect();
     };
 
     // ---- YouTube: a download pill in the action bar, left of the like

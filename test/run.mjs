@@ -242,6 +242,7 @@ await test('reddit: removes login wall, unblurs, sets over18', {
 
 await test('youtube (m.): PiP button, ad hiding, ad skip, dislikes, SponsorBlock, download button', {
   routes: { 'https://m.youtube.com/watch': MYT_WATCH },
+  store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { mode: 'service' } } } }) },
   xhr: {
     'https://returnyoutubedislikeapi.com/votes': { status: 200, text: JSON.stringify({ id: VIDEO_ID, likes: 1000, dislikes: 1234 }) },
     'https://returnyoutubedislikeapi.com/puzzle': { status: 500, text: '' },
@@ -340,6 +341,7 @@ const MYT_2026 = html(`
 
 await test('youtube 2026 layout: dislikes on the dislike button (not Subscribe), visible download button', {
   routes: { 'https://m.youtube.com/watch': MYT_2026 },
+  store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { mode: 'service' } } } }) },
   xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: JSON.stringify({ likes: 211, dislikes: 3 }) } }
 }, async ({ page, opened }) => {
   await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
@@ -364,8 +366,92 @@ await test('youtube 2026 layout: dislikes on the dislike button (not Subscribe),
   await until(() => opened.length > 0, 2000, 'download opened');
 });
 
+// ---- Save to Photos ---------------------------------------------------------
+// iOS share sheet stub: records what would be offered to "Save Video".
+const SHARE_STUB = `<script>
+  navigator.canShare = () => true;
+  navigator.share = async ({ files }) => { window.__shared = files.map((f) => ({ name: f.name, type: f.type, size: f.size })); };
+</script>`;
+const GV = 'https://rr1---sn-test.googlevideo.com/videoplayback?id=1&itag=18';
+const SIZE = 12 * 1000 * 1000;
+const playerOk = (title) => ({ status: 200, contentType: 'application/json', body: JSON.stringify({
+  playabilityStatus: { status: 'OK' },
+  videoDetails: { videoId: VIDEO_ID, title },
+  streamingData: { formats: [{ itag: 18, url: GV, mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"', height: 360, qualityLabel: '360p', contentLength: String(SIZE) }] }
+}) });
+const googlevideo = (url) => {
+  const m = url.match(/[?&]range=(\d+)-(\d+)/);
+  const len = m ? +m[2] - +m[1] + 1 : SIZE;
+  return { status: 200, contentType: 'video/mp4', headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(len, 7) };
+};
+const clickToastAction = (page, label) => page.evaluate((l) => {
+  const b = Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.toast button')).find((x) => x.textContent === l);
+  if (!b) return false;
+  b.click();
+  return true;
+}, label);
+
+await test('save to photos: YouTube video is downloaded in ranges and offered to "Save Video"', {
+  routes: {
+    'https://m.youtube.com/youtubei/v1/player': () => playerOk('Test: Video/Title'),
+    'https://m.youtube.com/watch': MYT_2026.replace('<body>', '<body>' + SHARE_STUB),
+    'https://rr1---sn-test.googlevideo.com/': googlevideo
+  },
+  xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
+}, async ({ page, hits, opened, ui }) => {
+  await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+  await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+  await page.tap('.ioss-yt-dl');
+  await until(async () => (await ui('.toast .msg')).some((t) => /Ready: 11\.4 MB/.test(t.text)), 8000, 'ready toast');
+  assert(await clickToastAction(page, 'Save'), 'Save action present');
+  const shared = await until(() => page.evaluate(() => window.__shared), 3000, 'share sheet');
+  assert(shared.length === 1 && shared[0].name === 'Test Video Title.mp4' && shared[0].type === 'video/mp4' && shared[0].size === SIZE,
+    'file offered: ' + JSON.stringify(shared));
+  const ranges = hits.filter((h) => h.includes('googlevideo.com') && /range=\d+-\d+/.test(h));
+  assert(ranges.length === 3, 'downloaded in 3 ranges of 5 MB: ' + ranges.length);
+  assert(opened.length === 0, 'no website opened');
+});
+
+await test('save to photos: falls back to the website when YouTube refuses', {
+  routes: {
+    'https://m.youtube.com/youtubei/v1/player': { status: 200, contentType: 'application/json', body: '{"playabilityStatus":{"status":"LOGIN_REQUIRED"}}' },
+    'https://m.youtube.com/watch': MYT_2026
+  },
+  xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
+}, async ({ page, opened, ui }) => {
+  await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+  await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+  await page.tap('.ioss-yt-dl');
+  await until(async () => (await ui('.toast .msg')).some((t) => /Couldn't save this video directly/.test(t.text)), 6000, 'failure toast');
+  assert(await clickToastAction(page, 'Open website'), 'fallback action');
+  await until(() => opened.length > 0, 2000, 'website opened');
+  assert(opened[0].startsWith('https://www.tool77.com/'), 'fallback url: ' + opened[0]);
+});
+
+await test('save to photos: other sites save the on-screen video file; streamed videos fall back', {
+  routes: {
+    'https://www.instagram.com/reel/FILE/': html(SHARE_STUB + '<article><h1>My reel</h1><video src="https://cdn.example/v.mp4" style="width:300px;height:500px"></video></article>'),
+    'https://www.instagram.com/reel/BLOB/': html(SHARE_STUB + '<article><video style="width:300px;height:500px"></video></article><script>document.querySelector("video").src = URL.createObjectURL(new MediaSource());</script>'),
+    'https://cdn.example/': { status: 200, contentType: 'video/mp4', headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(3000, 1) }
+  }
+}, async ({ page, ui }) => {
+  const tapFab = () => page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.fab.show').click());
+  await page.goto('https://www.instagram.com/reel/FILE/');
+  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'fab');
+  await tapFab();
+  await until(async () => (await ui('.toast .msg')).some((t) => /Ready/.test(t.text)), 5000, 'ready');
+  await clickToastAction(page, 'Save');
+  const shared = await until(() => page.evaluate(() => window.__shared), 3000, 'shared');
+  assert(shared[0].name === 'My reel.mp4' && shared[0].size === 3000, 'file: ' + JSON.stringify(shared));
+  await page.goto('https://www.instagram.com/reel/BLOB/');
+  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'fab 2');
+  await tapFab();
+  await until(async () => (await ui('.toast .msg')).some((t) => /streams video in pieces/.test(t.text)), 4000, 'explained fallback');
+});
+
 await test('youtube: Shorts keep the floating download button', {
-  routes: { 'https://m.youtube.com/shorts': html('<video style="width:300px;height:500px"></video>') }
+  routes: { 'https://m.youtube.com/shorts': html('<video style="width:300px;height:500px"></video>') },
+  store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { mode: 'service' } } } }) }
 }, async ({ page, ui, opened }) => {
   await page.goto('https://m.youtube.com/shorts/abcdefghijk');
   await until(async () => (await ui('.fab.show')).length > 0, 4000, 'floating button on Shorts');
@@ -748,7 +834,8 @@ await test('instagram: close-button mode', {
 
 await test('downloader: Instagram picks the reel that is on screen', {
   routes: { 'https://www.instagram.com/': html(`<div style="height:2000px"><article style="height:600px"><a href="/p/AAA/">a</a><video style="width:300px;height:500px"></video></article>
-    <article style="height:600px"><a href="/reel/BBB/">b</a><video style="width:300px;height:500px"></video></article></div>`) }
+    <article style="height:600px"><a href="/reel/BBB/">b</a><video style="width:300px;height:500px"></video></article></div>`) },
+  store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { mode: 'service' } } } }) }
 }, async ({ page, opened }) => {
   await page.goto('https://www.instagram.com/');
   await page.evaluate(() => window.scrollTo(0, 650));

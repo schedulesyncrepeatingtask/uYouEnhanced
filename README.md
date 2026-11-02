@@ -15,7 +15,7 @@ module updates itself**.
 | SponsorBlock | Simple Sponsor Skipper 2026.03 | Skips sponsors, intros and other segments (with an **Undo** button) |
 | Return YouTube Dislike | Return YouTube Dislike 3.2.0-ios | Shows dislike counts on m.youtube.com, the desktop site and Shorts |
 | YouTube: PiP & player tweaks | YouTube PIP Button (iOS Safari) 1.3 | Picture-in-Picture button; optional "Shorts → normal player" and background play |
-| Video downloader | All-in-One Video Downloader 1.0.19 | Download button for YouTube, TikTok, Instagram, X, Threads, Facebook, Pinterest, Snapchat, TED, Spotify and more |
+| Video downloader | All-in-One Video Downloader 1.0.19 | Download button that saves the video to your camera roll (YouTube up to 360p), or opens a downloader website for HD, on YouTube, TikTok, Instagram, X, Threads, Facebook, Pinterest, Snapchat, TED, Spotify and more |
 | Dark Mode | Dark Mode 护眼模式 1.5.8 | Dims, warms or inverts every site; skips sites that are already dark; can follow the iPhone's Dark Mode and switch by time of day |
 | Remove web limits | Remove web limits 网页限制解除 1.3 | Lets you select and copy text and use the long-press menu on sites that block it |
 | Clean tracking URLs | Clean Tracking URLs 跟踪链接净化 0.7.8 | Strips tracking parameters from links and the address bar, with extra rules for Bilibili, Baidu, CSDN, Taobao/Alibaba, Douyin/TikTok, Amazon, YouTube, Google, Reddit, LinkedIn, eBay, JD and more |
@@ -182,6 +182,15 @@ itself, which is the same trust you give any auto-updating userscript.
 - It loaded three external libraries (StreamSaver, CryptoJS, JSEncrypt). Two were never used and StreamSaver
   doesn't work on iOS. All three are gone.
 - Direct video files are saved through the iOS share sheet (**Save Video**).
+- **Save to Photos (default):** tapping the button downloads the video inside Safari, then a **Save** button opens
+  the share sheet, where **Save Video** puts it in the camera roll. iOS doesn't let web pages save to Photos
+  without that last tap.
+  - YouTube: the suite asks YouTube's mobile-app API for the file and downloads it in 5 MB pieces. YouTube only
+    offers combined video+audio files up to **360p**; HD comes as separate video and audio streams that would need
+    merging, which isn't practical in Safari. For HD, switch the button to **Open downloader website**.
+  - Other sites: saved directly when the on-screen video plays from a real file. Sites that stream video in
+    pieces (common on Instagram, X and Facebook) fall back to the website, with a button in the message.
+  - Very large videos (over 800 MB) ask first, because the whole file is held in memory.
 
 **Don't Track Me Google**
 - Its beacon, fetch and `href` guards were installed from the sandbox, where on Safari they don't affect the page.
@@ -220,8 +229,10 @@ itself, which is the same trust you give any auto-updating userscript.
 
 ## Privacy notes
 
-- **Downloader:** tapping the button sends the video's page URL to the downloader service (tool77.com, as in the
-  original). You can choose "Just copy the link" instead.
+- **Downloader:** in the default "Save to Photos" mode, videos are fetched from YouTube or the site itself; nothing
+  is sent to a third party. In website mode, or when you tap "Open website" after a failed save, the video's page
+  URL is sent to the downloader service (tool77.com, as in the original). You can choose "Just copy the link"
+  instead.
 - **SponsorBlock:** only the first 4 characters of the video ID's hash are sent (configurable).
 - **Return YouTube Dislike:** sends the video ID, and your vote unless you turn that off.
 - **Bypass All Shortlinks:** the "Route results through the author's blog" option is off by default.
