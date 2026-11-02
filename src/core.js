@@ -419,7 +419,8 @@
     toasts.appendChild(node);
     requestAnimationFrame(() => node.classList.add('show'));
     if (timeout) setTimeout(close, timeout);
-    return { close };
+    // update(): change the text of a long-running toast (e.g. progress).
+    return { close, update: (text) => { node.querySelector('.msg').textContent = text; } };
   }
 
   function positionFabs() {
