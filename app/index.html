@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ClearTube</title>
+  <meta name="description" content="A distraction-free video app for iPhone with SponsorBlock, dislike counts and local subscriptions.">
+  <meta name="theme-color" content="#0f0f12" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ClearTube">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" href="icon-192.png">
+  <style>
+    :root {
+      --bg: #ffffff; --bg2: #f2f2f6; --fg: #0f0f12; --mut: #606068; --line: rgba(0,0,0,.09);
+      --acc: #6a4cf5; --acc-fg: #fff; --chip: rgba(0,0,0,.06); --bar: rgba(255,255,255,.86);
+      --safe-t: env(safe-area-inset-top, 0px); --safe-b: env(safe-area-inset-bottom, 0px);
+      --tab-h: 52px; --head-h: 48px;
+      color-scheme: light dark;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0f0f12; --bg2: #1c1c22; --fg: #f1f1f4; --mut: #a0a0aa; --line: rgba(255,255,255,.1);
+        --acc: #8f78ff; --chip: rgba(255,255,255,.1); --bar: rgba(20,20,26,.86); }
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    [hidden] { display: none !important; } /* .iconbtn etc. set display, which would override hidden */
+    html, body { margin: 0; background: var(--bg); color: var(--fg); }
+    body { font: 15px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; -webkit-text-size-adjust: 100%;
+      min-height: 100vh; overscroll-behavior-y: none; }
+    a { color: var(--acc); }
+    button { font: inherit; color: inherit; }
+    input, textarea, select { font-size: 16px; } /* no zoom on focus */
+
+    header { position: fixed; top: 0; left: 0; right: 0; z-index: 20; height: calc(var(--head-h) + var(--safe-t)); padding-top: var(--safe-t);
+      display: flex; align-items: center; gap: 4px; padding-left: 8px; padding-right: 8px; background: var(--bar);
+      -webkit-backdrop-filter: saturate(180%) blur(18px); backdrop-filter: saturate(180%) blur(18px); border-bottom: 1px solid var(--line); }
+    header h1 { flex: 1; margin: 0 4px; font-size: 18px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .iconbtn { width: 44px; height: 44px; border: 0; background: none; border-radius: 22px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+    .iconbtn:active { background: var(--chip); }
+    .iconbtn svg, .tab svg, .act svg { width: 24px; height: 24px; fill: currentColor; }
+
+    main { padding: calc(var(--head-h) + var(--safe-t)) 0 calc(var(--tab-h) + var(--safe-b) + 12px); }
+
+    nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; height: calc(var(--tab-h) + var(--safe-b));
+      padding-bottom: var(--safe-b); background: var(--bar); -webkit-backdrop-filter: saturate(180%) blur(18px); backdrop-filter: saturate(180%) blur(18px);
+      border-top: 1px solid var(--line); }
+    .tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 0; background: none;
+      font-size: 10px; color: var(--mut); text-decoration: none; }
+    .tab.on { color: var(--fg); }
+
+    .pad { padding: 12px 14px; }
+    .muted { color: var(--mut); }
+    .small { font-size: 13px; }
+    .row { display: flex; align-items: center; gap: 10px; }
+    .btn { min-height: 40px; padding: 0 16px; border-radius: 20px; border: 0; background: var(--chip); font-weight: 600; display: inline-flex;
+      align-items: center; justify-content: center; gap: 6px; text-decoration: none; color: var(--fg); }
+    .btn.primary { background: var(--acc); color: var(--acc-fg); }
+    .btn:active { opacity: .7; }
+    .card { background: var(--bg2); border-radius: 14px; padding: 14px; margin: 12px 14px; }
+    .empty { text-align: center; padding: 40px 24px; color: var(--mut); }
+    .empty h2 { color: var(--fg); font-size: 19px; margin: 8px 0; }
+
+    /* video cards */
+    .feed { display: flex; flex-direction: column; gap: 18px; padding-top: 8px; }
+    .vcard { display: block; text-decoration: none; color: inherit; }
+    .thumb { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; background: var(--bg2); overflow: hidden; }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .thumb .dur { position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,.8); color: #fff; font-size: 12px; font-weight: 600;
+      padding: 1px 5px; border-radius: 4px; }
+    .thumb .prog { position: absolute; left: 0; bottom: 0; height: 3px; background: #ff3b30; }
+    .vmeta { display: flex; gap: 10px; padding: 10px 14px 0; }
+    .avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--bg2); flex: none; object-fit: cover; }
+    .vtitle { font-weight: 600; font-size: 15px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .vsub { color: var(--mut); font-size: 13px; margin-top: 2px; }
+    .compact { display: flex; gap: 10px; padding: 6px 14px; text-decoration: none; color: inherit; }
+    .compact .thumb { width: 160px; flex: none; border-radius: 8px; }
+    .compact .vtitle { font-size: 14px; }
+    .chan { display: flex; align-items: center; gap: 12px; padding: 10px 14px; text-decoration: none; color: inherit; }
+    .chan .avatar { width: 52px; height: 52px; }
+
+    /* watch */
+    .player { position: sticky; top: calc(var(--head-h) + var(--safe-t)); z-index: 15; background: #000; aspect-ratio: 16 / 9; width: 100%; }
+    .player iframe, .player > div { width: 100%; height: 100%; border: 0; display: block; }
+    .wtitle { font-size: 18px; font-weight: 700; line-height: 1.3; margin: 12px 14px 4px; }
+    .acts { display: flex; gap: 8px; overflow-x: auto; padding: 10px 14px; scrollbar-width: none; }
+    .acts::-webkit-scrollbar { display: none; }
+    .act { flex: none; min-height: 36px; padding: 0 14px; border-radius: 18px; border: 0; background: var(--chip); display: inline-flex;
+      align-items: center; gap: 6px; font-weight: 600; font-size: 14px; text-decoration: none; color: var(--fg); }
+    .act svg { width: 20px; height: 20px; }
+    .act.on { background: var(--fg); color: var(--bg); }
+    .desc { white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+    .desc.clamped { max-height: 4.2em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 60%, transparent); mask-image: linear-gradient(#000 60%, transparent); }
+    .ts { border: 0; background: none; color: var(--acc); padding: 0; font: inherit; }
+    .desc-toggle { border: 0; background: none; color: var(--acc); font: inherit; font-weight: 600; padding: 4px 14px 8px; min-height: 36px; }
+    .sbbar { position: relative; height: 4px; background: var(--chip); margin: 0 14px; border-radius: 2px; overflow: hidden; }
+    .sbbar span { position: absolute; top: 0; bottom: 0; background: #00d26a; }
+    .section { font-weight: 700; font-size: 17px; margin: 18px 14px 6px; }
+
+    /* search */
+    .searchbox { flex: 1; display: flex; align-items: center; background: var(--chip); border-radius: 18px; height: 36px; padding: 0 12px; }
+    .searchbox input { flex: 1; border: 0; background: none; color: var(--fg); outline: none; min-width: 0; }
+
+    /* settings */
+    .field { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+    .field input[type=text], .field textarea { width: 100%; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 10px; padding: 9px 11px; }
+    .switch { display: flex; align-items: center; justify-content: space-between; min-height: 44px; border-bottom: 1px solid var(--line); gap: 12px; }
+    .switch:last-child { border-bottom: 0; }
+    .switch input { -webkit-appearance: none; appearance: none; width: 51px; height: 31px; border-radius: 16px; background: var(--chip); position: relative; flex: none; margin: 0; transition: background .2s; }
+    .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,.25); transition: transform .2s; }
+    .switch input:checked { background: #34c759; }
+    .switch input:checked::after { transform: translateX(20px); }
+
+    .toast { position: fixed; left: 50%; transform: translate(-50%, 20px); bottom: calc(var(--tab-h) + var(--safe-b) + 12px); z-index: 40;
+      width: min(92vw, 420px); display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 8px 8px 14px; border-radius: 14px;
+      background: rgba(28,28,32,.94); color: #fff; box-shadow: 0 6px 24px rgba(0,0,0,.3); opacity: 0; transition: opacity .2s, transform .2s; font-size: 14px; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast span { flex: 1; }
+    .toast button { min-height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: rgba(255,255,255,.18); color: #fff; font-weight: 600; }
+    .spinner { width: 28px; height: 28px; margin: 40px auto; border: 3px solid var(--chip); border-top-color: var(--acc); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .more { display: block; margin: 16px auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <button class="iconbtn" id="back" aria-label="Back" hidden><svg viewBox="0 0 24 24"><path d="M15.4 4.6 14 3.2 5.2 12l8.8 8.8 1.4-1.4L8 12z"/></svg></button>
+    <h1 id="title">ClearTube</h1>
+    <button class="iconbtn" id="refresh" aria-label="Refresh" hidden><svg viewBox="0 0 24 24"><path d="M17.7 6.3A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.7 10h-2.1A6 6 0 1 1 12 6c1.7 0 3.1.7 4.2 1.8L13 11h7V4z"/></svg></button>
+  </header>
+  <main id="view"></main>
+  <nav class="tabs" aria-label="Sections">
+    <a class="tab" href="#/" data-tab="home"><svg viewBox="0 0 24 24"><path d="M12 3 3 10v11h6v-6h6v6h6V10z"/></svg>Home</a>
+    <a class="tab" href="#/search" data-tab="search"><svg viewBox="0 0 24 24"><path d="M10 3a7 7 0 0 1 5.6 11.2l5.6 5.6-1.4 1.4-5.6-5.6A7 7 0 1 1 10 3zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10z"/></svg>Search</a>
+    <a class="tab" href="#/library" data-tab="library"><svg viewBox="0 0 24 24"><path d="M4 6h2v14H4zm4-2h2v16H8zm5 1 2-.5 4.5 15-2 .5z"/></svg>Library</a>
+    <a class="tab" href="#/settings" data-tab="settings"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>Settings</a>
+  </nav>
+  <script src="app.js"></script>
+</body>
+</html>
