@@ -1,6 +1,6 @@
 // ClearTube service worker: the app opens offline, and updates arrive the
 // next time it is online (app files are network-first, cache fallback).
-const CACHE = 'cleartube-v1';
+const CACHE = 'cleartube-v2';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
