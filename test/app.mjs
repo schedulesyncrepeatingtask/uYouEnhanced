@@ -25,7 +25,8 @@ const assert = (c, m) => { if (!c) throw new Error('Assertion failed: ' + m); };
 async function until(fn, ms = 5000, what = 'condition') {
   const end = Date.now() + ms;
   let last;
-  while (Date.now() < end) { last = await fn(); if (last) return last; await sleep(80); }
+  // Errors are expected while the page is away at the (fake) Google sign-in.
+  while (Date.now() < end) { try { last = await fn(); } catch (e) { last = String(e.message).slice(0, 80); } if (last && typeof last !== 'string' || (last && !/^(page\.|.*Execution context|.*SecurityError)/.test(last))) return last; await sleep(80); }
   throw new Error(`Timed out waiting for ${what} (last: ${JSON.stringify(last)})`);
 }
 
@@ -59,13 +60,31 @@ function video(id, title, extra = {}) {
 const VIDEOS = { [VID]: video(VID, 'Never Gonna Give You Up'), [VID2]: video(VID2, 'Second video', { published: '2026-11-04T10:00:00Z', duration: 'PT10M' }),
   shortsss123: video('shortsss123', 'A Short', { duration: 'PT45S', published: '2026-11-05T10:00:00Z' }) };
 
-function googleApi(url, calls) {
+function googleApi(req, calls) {
+  const url = req.url();
   const u = new URL(url);
-  const ep = u.pathname.split('/').pop();
-  calls.push(ep);
+  const ep = u.pathname.replace('/youtube/v3/', '');
+  const bearer = (req.headers().authorization || '').replace('Bearer ', '');
+  calls.push(ep + (req.method() !== 'GET' ? ':' + req.method() : '') + (bearer ? '@' + bearer : '') + (u.searchParams.get('key') ? '#key' : '') +
+    (u.searchParams.get('rating') ? '=' + u.searchParams.get('rating') : ''));
   const json = (b, status = 200) => ({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(b) });
   if (u.searchParams.get('key') === 'BADKEY') return json({ error: { errors: [{ reason: 'keyInvalid' }], message: 'API key not valid' } }, 400);
   if (u.searchParams.get('key') === 'NOQUOTA') return json({ error: { errors: [{ reason: 'quotaExceeded' }], message: 'quota' } }, 403);
+  if (bearer === 'EXPIRED') return json({ error: { errors: [{ reason: 'authError' }], message: 'Invalid Credentials' } }, 401);
+  if (bearer) {
+    // Signed-in endpoints
+    if (ep === 'channels' && u.searchParams.get('mine')) return json({ items: [{ id: 'UCme', snippet: { title: 'Me Myself', thumbnails: { default: { url: 'https://i.example/me.jpg' } } } }] });
+    if (ep === 'subscriptions' && req.method() === 'GET') return json({ items: [
+      { id: 'sub1', snippet: { title: 'Test Channel', resourceId: { channelId: CHAN }, thumbnails: { default: { url: 'https://i.example/c.jpg' } } } },
+      { id: 'sub2', snippet: { title: 'Other Channel', resourceId: { channelId: 'UCzzzzzzzzzzzzzzzzzzzzzz' }, thumbnails: { default: { url: 'https://i.example/o.jpg' } } } }] });
+    if (ep === 'subscriptions' && req.method() === 'POST') return json({ id: 'subNEW', snippet: JSON.parse(req.postData()).snippet });
+    if (ep === 'subscriptions' && req.method() === 'DELETE') return { status: 204, headers: { 'access-control-allow-origin': '*' }, body: '' };
+    if (ep === 'videos/getRating') return json({ items: [{ videoId: u.searchParams.get('id'), rating: 'none' }] });
+    if (ep === 'videos/rate') return { status: 204, headers: { 'access-control-allow-origin': '*' }, body: '' };
+    if (ep === 'videos' && u.searchParams.get('myRating') === 'like') return json({ items: [VIDEOS[VID2]] });
+    if (ep === 'playlists') return json({ items: [{ id: 'PLmine', snippet: { title: 'My Mix', thumbnails: { medium: { url: 'https://i.example/p.jpg' } } }, contentDetails: { itemCount: 2 }, status: { privacyStatus: 'private' } }] });
+  }
+  if (ep === 'commentThreads') return json({ items: [{ snippet: { totalReplyCount: 3, topLevelComment: { snippet: { authorDisplayName: '@fan', authorProfileImageUrl: 'https://i.example/a.jpg', textDisplay: 'Great video!', likeCount: 42, publishedAt: '2026-11-02T10:00:00Z' } } } }] });
   if (ep === 'search') return json({ items: [
     { id: { kind: 'youtube#channel', channelId: CHAN }, snippet: { channelTitle: 'Test Channel', thumbnails: { default: { url: 'https://i.example/c.jpg' } } } },
     { id: { kind: 'youtube#video', videoId: VID } }, { id: { kind: 'youtube#video', videoId: VID2 } }] });
@@ -91,7 +110,16 @@ async function test(name, opts, fn) {
       return route.fulfill({ status: 200, contentType: TYPES[extname(file)] || 'application/octet-stream', body: readFileSync(file) });
     }
     if (url.startsWith('https://www.youtube.com/iframe_api')) return route.fulfill({ status: 200, contentType: 'text/javascript', body: FAKE_IFRAME_API });
-    if (url.startsWith('https://www.googleapis.com/youtube/v3/')) return route.fulfill(googleApi(url, calls));
+    if (url.startsWith('https://www.googleapis.com/youtube/v3/')) return route.fulfill(googleApi(route.request(), calls));
+    if (url.startsWith('https://accounts.google.com/o/oauth2/v2/auth')) {
+      // Fake Google sign-in: answers straight away like an already-signed-in user.
+      const q = new URL(url).searchParams;
+      calls.push('oauth:' + q.get('prompt') + ':' + q.get('client_id') + ':' + q.get('response_type'));
+      const answer = opts.oauth ? opts.oauth(q) : `access_token=TOKEN1&token_type=Bearer&expires_in=3599&scope=${encodeURIComponent(q.get('scope'))}&state=${q.get('state')}`;
+      // (Playwright cannot fulfil navigations with a 302, so the fake page redirects by script.)
+      return route.fulfill({ status: 200, contentType: 'text/html', body: `<script>location.replace(${JSON.stringify(q.get('redirect_uri') + '#' + answer)})</script>` });
+    }
+    if (url.startsWith('https://oauth2.googleapis.com/revoke')) { calls.push('revoke'); return route.fulfill({ status: 200, body: '' }); }
     if (url.startsWith('https://www.youtube.com/oembed')) return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ title: 'Title via oEmbed', author_name: 'Test Channel' }) });
     if (url.startsWith('https://returnyoutubedislikeapi.com/votes')) return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ likes: 4321, dislikes: 87 }) });
     if (url.startsWith('https://sponsor.ajay.app/api/skipSegments/')) {
@@ -122,6 +150,7 @@ async function test(name, opts, fn) {
   }
 }
 
+const SIGNED_IN = (token = 'TOKEN1', expMs = 3600e3) => ({ 'ct:settings': { clientId: 'CLIENT.apps.googleusercontent.com' }, 'ct:auth': { token, exp: Date.now() + expMs } });
 const text = (page, sel) => page.evaluate((s) => { const n = document.querySelector(s); return n ? n.textContent : null; }, sel);
 const toastText = (page) => text(page, '.toast span');
 const KEY = { 'ct:settings': { apiKey: 'GOODKEY' } };
@@ -151,7 +180,7 @@ await test('installs as a full-screen home-screen app', {}, async ({ page }) => 
 
 await test('without an API key: pasted link plays with SponsorBlock, dislikes, resume and history', {}, async ({ page, calls }) => {
   await page.goto(APP);
-  assert(/Paste a YouTube link/.test(await text(page, 'main')), 'onboarding explains keyless use');
+  assert(/paste a YouTube link/i.test(await text(page, 'main')), 'onboarding explains keyless use');
   await page.tap('a[data-tab="search"]');
   await page.fill('input[type=search]', `https://youtu.be/${VID}?si=x`);
   await page.press('input[type=search]', 'Enter');
@@ -209,7 +238,7 @@ await test('with an API key: search, watch, subscribe, home feed, library', { st
   assert(/Subscriptions \(1\)/.test(lib) && /Test Channel/.test(lib) && /Never Gonna Give You Up/.test(lib), 'library lists subscription, watch later and history: ' + lib.slice(0, 400));
   const q = await page.evaluate(() => JSON.parse(localStorage.getItem('ct:quota')));
   assert(q.used >= 100 && q.used < 120, 'quota tracked: ' + q.used);
-  assert(calls.filter((c) => c === 'search').length === 1, 'one search call');
+  assert(calls.filter((c) => c.startsWith('search')).length === 1, 'one search call');
 });
 
 await test('hide Shorts setting, channel page and subscription import', { storage: { 'ct:settings': { apiKey: 'GOODKEY', hideShorts: true } } }, async ({ page }) => {
@@ -218,7 +247,7 @@ await test('hide Shorts setting, channel page and subscription import', { storag
   assert(/1\.5M subscribers/.test(await text(page, '.chan')), 'channel header');
   await page.tap('a[data-tab="library"]');
   await page.fill('textarea', 'https://www.youtube.com/@testchannel\nnot a channel');
-  await page.tap('.card .btn.primary');
+  await page.getByRole('button', { name: 'Import', exact: true }).tap();
   await until(async () => /Imported 1 new subscription/.test(await toastText(page) || ''), 4000, 'import toast');
   await until(async () => /Subscriptions \(1\)/.test(await text(page, 'main')), 2000, 'library refreshed');
 });
@@ -234,16 +263,96 @@ await test('clear messages for a bad key and an exhausted quota', { storage: { '
 
 await test('settings: key check, SponsorBlock categories, export', {}, async ({ page }) => {
   await page.goto(APP + '#/settings');
-  await page.fill('.card input[type=text]', 'GOODKEY');
+  await page.fill('input[placeholder="AIza…"]', 'GOODKEY');
   await page.tap('text=Save key');
   await until(async () => /Key works/.test(await toastText(page) || ''), 3000, 'key verified');
   const labels = await page.$$eval('.switch > span', (n) => n.map((x) => x.childNodes[0].textContent));
   assert(labels.includes('Skip sponsors') && labels.includes('Skip non-music parts in music videos'), 'readable labels: ' + labels.slice(0, 3));
-  const fontSize = await page.evaluate(() => getComputedStyle(document.querySelector('.card input[type=text]')).fontSize);
+  const fontSize = await page.evaluate(() => getComputedStyle(document.querySelector('input[placeholder="AIza…"]')).fontSize);
   assert(fontSize === '16px', 'inputs do not trigger iOS zoom');
 });
 
+await test('Google sign-in: settings → Google → back to Library with the account', {}, async ({ page, calls }) => {
+  await page.goto(APP + '#/settings');
+  await page.tap('summary');
+  await page.fill('details input[type=text]', 'CLIENT.apps.googleusercontent.com');
+  assert(/https:\/\/app\.test\/cleartube\//.test(await text(page, 'details')), 'setup shows the exact redirect URI');
+  await page.tap('text=Sign in with Google');
+  await until(() => page.evaluate(() => location.hash === '#/library'), 5000, 'returned to Library');
+  assert(calls.includes('oauth:select_account:CLIENT.apps.googleusercontent.com:token'), 'OAuth request: ' + calls.filter((c) => c.startsWith('oauth')));
+  await until(async () => /Signed in with Google/.test(await toastText(page) || ''), 3000, 'signed-in toast');
+  const lib = await until(async () => { const t = await text(page, 'main'); return /Me Myself/.test(t) && /Subscriptions \(2\)/.test(t) && /My Mix/.test(t) && /Second video/.test(t) && t; }, 4000, 'account library');
+  assert(/Other Channel/.test(lib), 'account subscriptions listed');
+  assert(!calls.some((c) => c.includes('#key')) && calls.some((c) => c.startsWith('subscriptions@TOKEN1')), 'requests use the account token, not a key');
+  assert(await page.evaluate(() => !/access_token/.test(location.href)), 'token removed from the address');
+  // Liked videos & playlist pages
+  await page.tap('a[href="#/liked"]');
+  await until(() => page.$$eval('.vcard', (n) => n.length === 1), 3000, 'liked list');
+  await page.goto(APP + '#/playlist/PLmine');
+  await until(() => page.$$eval('.vcard', (n) => n.length === 3), 3000, 'playlist items');
+});
+
+await test('signed in: home feed from YouTube subscriptions; like, dislike, comments', { storage: SIGNED_IN() }, async ({ page, calls }) => {
+  await page.goto(APP);
+  await until(() => page.$$eval('.vcard', (n) => n.length === 3), 4000, 'feed from account subscriptions');
+  assert(calls.some((c) => c.startsWith('playlistItems@TOKEN1')), 'uploads fetched with the account');
+  await page.goto(APP + '#/watch/' + VID);
+  await until(async () => /4\.3K/.test(await text(page, '.acts') || '') && /87/.test(await text(page, '.acts')), 4000, 'counts');
+  await page.tap('button[aria-label="Like"]');
+  await until(async () => /4\.3K/.test(await text(page, 'button[aria-label="Like"]')) && await page.evaluate(() => document.querySelector('button[aria-label="Like"]').classList.contains('on')), 2000, 'liked');
+  assert(calls.includes('videos/rate:POST@TOKEN1=like'), 'rated like: ' + calls.filter((c) => c.includes('rate')));
+  await page.tap('button[aria-label="Dislike"]');
+  await until(() => page.evaluate(() => document.querySelector('button[aria-label="Dislike"]').classList.contains('on') && !document.querySelector('button[aria-label="Like"]').classList.contains('on')), 2000, 'switched to dislike');
+  assert(/88/.test(await text(page, 'button[aria-label="Dislike"]')), 'dislike count +1');
+  assert(calls.includes('videos/rate:POST@TOKEN1=dislike'), 'rated dislike');
+  await until(async () => /Great video!/.test(await text(page, 'main')), 3000, 'comments');
+  assert(/3 replies/.test(await text(page, '.comment')), 'reply count');
+});
+
+await test('signed in: subscribe & unsubscribe change the YouTube account', { storage: SIGNED_IN() }, async ({ page, calls }) => {
+  await page.goto(APP + '#/channel/' + CHAN);
+  await until(async () => (await text(page, '.chan .btn')) === 'Subscribed', 4000, 'already subscribed (from account)');
+  await page.tap('.chan .btn');
+  await until(async () => (await text(page, '.chan .btn')) === 'Subscribe', 3000, 'unsubscribed');
+  assert(calls.includes('subscriptions:DELETE@TOKEN1'), 'DELETE sent');
+  await page.tap('.chan .btn');
+  await until(async () => (await text(page, '.chan .btn')) === 'Subscribed', 3000, 'subscribed again');
+  assert(calls.includes('subscriptions:POST@TOKEN1'), 'POST sent');
+});
+
+await test('expired sign-in renews silently and returns to the same page', { storage: SIGNED_IN('OLD', -1000) }, async ({ page, calls }) => {
+  await page.goto(APP + '#/library');
+  await until(() => page.evaluate(() => JSON.parse(localStorage.getItem('ct:auth')).token === 'TOKEN1'), 5000, 'new token');
+  assert(calls.some((c) => c.startsWith('oauth:none:')), 'silent renewal (prompt=none)');
+  await until(() => page.evaluate(() => location.hash === '#/library'), 2000, 'back on Library');
+  await until(async () => /Me Myself/.test(await text(page, 'main')), 4000, 'library loads with the new token');
+});
+
+await test('when Google needs the user, renewal asks to sign in again (no loop)', { storage: SIGNED_IN('OLD', -1000), oauth: (q) => `error=interaction_required&state=${q.get('state')}` }, async ({ page, calls }) => {
+  await page.goto(APP + '#/library');
+  await until(async () => /sign-in expired/.test(await toastText(page) || ''), 5000, 'expired message');
+  await sleep(1500);
+  assert(calls.filter((c) => c.startsWith('oauth:')).length === 1, 'tried only once');
+  assert(/Sign in with Google/.test(await text(page, 'main')), 'offers sign-in again');
+});
+
+await test('a sign-in answer with the wrong state is rejected', {}, async ({ page }) => {
+  await page.goto(APP + '#access_token=EVIL&expires_in=3600&state=forged');
+  await until(async () => /could not be verified/.test(await toastText(page) || ''), 3000, 'rejected');
+  assert(await page.evaluate(() => !localStorage.getItem('ct:auth') || !JSON.parse(localStorage.getItem('ct:auth'))), 'no token stored');
+});
+
 if (shotsDir) {
+  await test('screenshots (signed in)', { storage: SIGNED_IN(), dark: true }, async ({ page }) => {
+    await page.goto(APP + '#/library');
+    await until(async () => /My Mix/.test(await text(page, 'main') || ''), 4000, 'library');
+    await sleep(300);
+    await page.screenshot({ path: `${shotsDir}/ct-library.png` });
+    await page.goto(APP + '#/settings');
+    await page.tap('summary');
+    await sleep(300);
+    await page.screenshot({ path: `${shotsDir}/ct-settings.png` });
+  });
   for (const dark of [false, true]) {
     await test(`screenshots (${dark ? 'dark' : 'light'})`, { storage: KEY, dark }, async ({ page }) => {
       await page.goto(APP + '#/search?q=rick');

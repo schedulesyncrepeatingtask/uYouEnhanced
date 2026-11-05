@@ -26,27 +26,36 @@ module updates itself**.
 Safari extensions (and therefore this suite) don't run inside Home Screen web apps. **ClearTube** (`app/`) is a
 separate web app that builds the YouTube features in, so it works full screen without the Safari bar:
 
+- **Sign in with Google** (YouTube's official API): your real subscriptions as the home feed, subscribe and
+  unsubscribe, like and dislike, your liked videos and playlists, and comments
 - YouTube's official embedded player (privacy-enhanced `youtube-nocookie.com`), playing inline
 - **SponsorBlock** skipping with Undo, and segment markers under the title
 - **Dislike counts** (returnyoutubedislike.com), resume where you left off, tappable timestamps
-- Search, channel pages, **subscriptions** (import from links/@handles or a Google Takeout `subscriptions.csv`)
-  and a home feed of their new videos; Watch later, history, "Continue watching"
+- Search, channel pages, Watch later, history and "Continue watching" kept on the iPhone
 - Share, Open in YouTube, download website; optional "Hide Shorts"
 - Dark mode, 44 pt controls, safe areas for the notch and home bar; opens offline (app shell cached)
 - Your ad blocker keeps working inside it
 
-Limits: no Google sign-in (subscriptions, history and Watch later live only on your iPhone), and search, channels
-and the feed need a free **YouTube Data API key** (10,000 units/day ≈ 100 searches plus plenty of feed refreshes).
-Without a key you can still paste YouTube links. PiP works through Apple's fullscreen player (fullscreen → PiP
-icon, or swipe home), if iOS allows it in web apps.
+What YouTube's API doesn't allow, for any app: reading your YouTube **watch history** or **Watch Later** list
+(ClearTube keeps its own on the phone), and embedded playback doesn't count toward your YouTube history or give
+Premium's ad-free playback. Sign-in lasts an hour at a time and renews itself quietly (a quick hop to Google and
+back). PiP works through Apple's fullscreen player (fullscreen → PiP icon, or swipe home), if iOS allows it in
+web apps.
 
 **Set up**
 1. In the repository settings, open **Pages** and set **Source: GitHub Actions**. Every push to `main` that
    changes `app/` deploys it to `https://<user>.github.io/<repo>/`.
-2. Open that address in Safari → **Share → Add to Home Screen** (keep "Open as Web App" on).
-3. Get a key: in the Google Cloud console enable **YouTube Data API v3**, create an **API key** under Credentials,
-   and restrict it to your Pages address (HTTP referrers, `https://<user>.github.io/*`). Paste it in ClearTube's
-   Settings.
+2. Open that address in Safari → **Share → Add to Home Screen** (keep "Open as Web App" on), and open the app.
+3. In the [Google Cloud console](https://console.cloud.google.com/):
+   1. Enable **YouTube Data API v3**.
+   2. **OAuth consent screen:** External; add your own Google account as a **test user**.
+   3. **Credentials → Create credentials → OAuth client ID → Web application**, with
+      - Authorized JavaScript origin: `https://<user>.github.io`
+      - Authorized redirect URI: `https://<user>.github.io/<repo>/`
+4. In ClearTube: **Settings → One-time setup** → paste the client ID → **Sign in with Google**. Google shows an
+   "unverified app" notice because the app is yours; continue past it.
+
+An API key (Credentials → API key) is optional: it's only used for search and channels while you're signed out.
 
 ## Install on iPhone
 

@@ -124,6 +124,13 @@
     .spinner { width: 28px; height: 28px; margin: 40px auto; border: 3px solid var(--chip); border-top-color: var(--acc); border-radius: 50%; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .more { display: block; margin: 16px auto; }
+    .comment { display: flex; gap: 10px; padding: 8px 14px; }
+    .comment .avatar { width: 32px; height: 32px; }
+    .comment .desc { margin: 2px 0; }
+    details summary { min-height: 36px; display: flex; align-items: center; color: var(--acc); font-weight: 600; cursor: pointer; }
+    code { font-size: 12px; background: var(--chip); padding: 1px 4px; border-radius: 4px; word-break: break-all; }
+    select { border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 8px; min-height: 36px; padding: 0 8px; }
+    .act.on svg { fill: currentColor; }
   </style>
 </head>
 <body>
