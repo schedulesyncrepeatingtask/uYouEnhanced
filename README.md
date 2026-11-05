@@ -21,6 +21,33 @@ module updates itself**.
 | Clean tracking URLs | Clean Tracking URLs 跟踪链接净化 0.7.8 | Strips tracking parameters from links and the address bar, with extra rules for Bilibili, Baidu, CSDN, Taobao/Alibaba, Douyin/TikTok, Amazon, YouTube, Google, Reddit, LinkedIn, eBay, JD and more |
 | Bypass All Shortlinks | Bypass All Shortlinks 96.8 | Skips link-shortener waiting pages and has optional anti-annoyance tools |
 
+## ClearTube: the full-screen YouTube web app
+
+Safari extensions (and therefore this suite) don't run inside Home Screen web apps. **ClearTube** (`app/`) is a
+separate web app that builds the YouTube features in, so it works full screen without the Safari bar:
+
+- YouTube's official embedded player (privacy-enhanced `youtube-nocookie.com`), playing inline
+- **SponsorBlock** skipping with Undo, and segment markers under the title
+- **Dislike counts** (returnyoutubedislike.com), resume where you left off, tappable timestamps
+- Search, channel pages, **subscriptions** (import from links/@handles or a Google Takeout `subscriptions.csv`)
+  and a home feed of their new videos; Watch later, history, "Continue watching"
+- Share, Open in YouTube, download website; optional "Hide Shorts"
+- Dark mode, 44 pt controls, safe areas for the notch and home bar; opens offline (app shell cached)
+- Your ad blocker keeps working inside it
+
+Limits: no Google sign-in (subscriptions, history and Watch later live only on your iPhone), and search, channels
+and the feed need a free **YouTube Data API key** (10,000 units/day ≈ 100 searches plus plenty of feed refreshes).
+Without a key you can still paste YouTube links. PiP works through Apple's fullscreen player (fullscreen → PiP
+icon, or swipe home), if iOS allows it in web apps.
+
+**Set up**
+1. In the repository settings, open **Pages** and set **Source: GitHub Actions**. Every push to `main` that
+   changes `app/` deploys it to `https://<user>.github.io/<repo>/`.
+2. Open that address in Safari → **Share → Add to Home Screen** (keep "Open as Web App" on).
+3. Get a key: in the Google Cloud console enable **YouTube Data API v3**, create an **API key** under Credentials,
+   and restrict it to your Pages address (HTTP referrers, `https://<user>.github.io/*`). Paste it in ClearTube's
+   Settings.
+
 ## Install on iPhone
 
 1. Install a userscript manager for Safari. Either works:
@@ -244,6 +271,7 @@ node build.mjs           # src/ -> dist/ (bundle, meta, per-module files, manife
 node build.mjs --check   # fail if dist/ is stale
 node test/run.mjs        # end-to-end tests in an emulated iPhone 13 mini (needs Playwright + Chromium)
 node test/isolated.mjs   # same, but as a sandboxed content script, like Safari managers run it
+node test/app.mjs        # ClearTube web app, with fake YouTube/SponsorBlock/dislike services
 ```
 
 To release a module update, edit `src/modules/<id>.js`, bump that module's `version`, run `node build.mjs` and
@@ -258,6 +286,7 @@ src/modules/*.js       one file per module (an object literal; also published to
 src/header.js          userscript metadata template
 src/suite.json         suite name, version, repository and branch used for updates
 dist/                  build output — install dist/ios-userscript-suite.user.js
+app/                   ClearTube web app (deployed to GitHub Pages by .github/workflows/pages.yml)
 ```
 
 ## Credits & license

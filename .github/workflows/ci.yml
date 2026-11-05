@@ -15,3 +15,4 @@ jobs:
       - run: node build.mjs --check
       - run: node test/run.mjs
       - run: xvfb-run -a node test/isolated.mjs
+      - run: node test/app.mjs
