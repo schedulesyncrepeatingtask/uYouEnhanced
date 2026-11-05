@@ -9,7 +9,7 @@
  */
 'use strict';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const API = 'https://www.googleapis.com/youtube/v3/';
 const EMBED_HOST = 'https://www.youtube-nocookie.com';
 const SB_API = 'https://sponsor.ajay.app/api/skipSegments/';
@@ -47,7 +47,16 @@ const ICONS = {
   download: 'M5 20h14v-2H5zm7-3 6-6-1.4-1.4-3.6 3.6V4h-2v9.2L7.4 9.6 6 11z',
   pip: 'M19 7h-8v6h8zm2-4H3a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H3V5h18z',
   sub: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4z',
-  check: 'M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z'
+  check: 'M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z',
+  kebab: 'M12 8.5a1.8 1.8 0 1 0 0-3.6 1.8 1.8 0 0 0 0 3.6zm0 1.7a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zm0 5.3a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6z',
+  close: 'M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7l-1.4-1.4L9.2 12 2.9 5.7l1.4-1.4 6.3 6.3 6.3-6.3z',
+  channel: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7zm0 14a8 8 0 0 1-6.2-3c1.4-1.7 3.7-2.6 6.2-2.6s4.8.9 6.2 2.6A8 8 0 0 1 12 20z',
+  copy: 'M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11z',
+  history: 'M13 3a9 9 0 0 0-9 9H1l4 4 4-4H6a7 7 0 1 1 2.1 5l-1.4 1.4A9 9 0 1 0 13 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z',
+  liked: 'M2 21h4V9H2zm20-11a2 2 0 0 0-2-2h-6.3l1-4.6v-.3c0-.4-.2-.8-.4-1.1L13.2 1 6.6 7.6C6.2 8 6 8.5 6 9v10a2 2 0 0 0 2 2h9c.8 0 1.5-.5 1.8-1.2l3-7.1.2-.7z',
+  playlist: 'M3 6h12v2H3zm0 4h12v2H3zm0 4h8v2H3zm14 0v-4h-2v4h-4v2h4v4h2v-4h4v-2z',
+  settings: 'M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z',
+  chevron: 'M8.6 16.6 13.2 12 8.6 7.4 10 6l6 6-6 6z'
 };
 
 const store = {
@@ -240,7 +249,12 @@ async function api(endpoint, params, { method = 'GET', body, needAuth = false } 
 async function myChannel() {
   const j = await api('channels', { part: 'snippet', mine: 'true' }, { needAuth: true });
   const it = (j.items || [])[0];
-  return it ? { id: it.id, title: it.snippet.title, thumb: (it.snippet.thumbnails.default || {}).url } : null;
+  const me = it ? { id: it.id, title: it.snippet.title, thumb: (it.snippet.thumbnails.default || {}).url } : null;
+  if (me && signedIn() && (auth.thumb !== me.thumb || auth.name !== me.title)) {
+    auth = Object.assign({}, auth, { thumb: me.thumb, name: me.title });
+    store.set('auth', auth);
+  }
+  return me;
 }
 
 // The signed-in user's real YouTube subscriptions.
@@ -336,26 +350,101 @@ function progressOf(id) {
   return e && e.dur ? Math.min(1, e.pos / e.dur) : 0;
 }
 
-function videoCard(v) {
+const byline = (v) => [v.channel, v.views ? fmtNum(v.views) + ' views' : '', v.published ? ago(v.published) : ''].filter(Boolean).join(' · ');
+function thumbBox(v, q) {
   const p = progressOf(v.id);
-  return h('a', { class: 'vcard', href: '#/watch/' + v.id },
-    h('span', { class: 'thumb' }, h('img', { src: thumbUrl(v.id, 'hqdefault'), alt: '', loading: 'lazy', decoding: 'async' }),
-      v.dur ? h('span', { class: 'dur', text: v.live ? 'LIVE' : clock(v.dur) }) : null,
-      p > 0.02 ? h('span', { class: 'prog', style: { width: (p * 100).toFixed(1) + '%' } }) : null),
-    h('div', { class: 'vmeta' },
-      h('div', { style: { minWidth: '0' } },
-        h('div', { class: 'vtitle', text: v.title }),
-        h('div', { class: 'vsub', text: [v.channel, v.views ? fmtNum(v.views) + ' views' : '', v.published ? ago(v.published) : ''].filter(Boolean).join(' · ') }))));
+  return h('span', { class: 'thumb' }, h('img', { src: thumbUrl(v.id, q), alt: '', loading: 'lazy', decoding: 'async' }),
+    v.dur ? h('span', { class: 'dur', text: v.live ? 'LIVE' : clock(v.dur) }) : null,
+    p > 0.02 ? h('span', { class: 'prog', style: { width: (p * 100).toFixed(1) + '%' } }) : null);
+}
+// Full-width feed card: thumbnail, channel avatar, two-line title, byline, ⋮ menu.
+function videoCard(v) {
+  return h('div', { class: 'vcard' },
+    h('a', { href: '#/watch/' + v.id },
+      thumbBox(v, 'hqdefault'),
+      h('div', { class: 'vmeta' },
+        v.channelId ? h('img', { class: 'avatar', alt: '', 'data-ch': v.channelId, src: avatarCache.get(v.channelId) || null, loading: 'lazy' }) : null,
+        h('div', { style: { minWidth: '0' } }, h('div', { class: 'vtitle', text: v.title }), h('div', { class: 'vsub', text: byline(v) })))),
+    h('button', { class: 'kebab', type: 'button', 'aria-label': 'More actions', onclick: (e) => { e.preventDefault(); videoMenu(v); } }, icon(ICONS.kebab)));
 }
 function compactCard(v) {
-  const p = progressOf(v.id);
-  return h('a', { class: 'compact', href: '#/watch/' + v.id },
-    h('span', { class: 'thumb' }, h('img', { src: thumbUrl(v.id), alt: '', loading: 'lazy', decoding: 'async' }),
-      v.dur ? h('span', { class: 'dur', text: clock(v.dur) }) : null,
-      p > 0.02 ? h('span', { class: 'prog', style: { width: (p * 100).toFixed(1) + '%' } }) : null),
-    h('div', { style: { minWidth: '0' } }, h('div', { class: 'vtitle', text: v.title }),
-      h('div', { class: 'vsub', text: [v.channel, v.views ? fmtNum(v.views) + ' views' : '', v.published ? ago(v.published) : ''].filter(Boolean).join(' · ') })));
+  return h('a', { class: 'compact', href: '#/watch/' + v.id }, thumbBox(v),
+    h('div', { style: { minWidth: '0' } }, h('div', { class: 'vtitle', text: v.title }), h('div', { class: 'vsub', text: byline(v) })));
 }
+// Small card for horizontal rows (history, liked videos).
+function hCard(v) {
+  return h('a', { class: 'hcard', href: '#/watch/' + v.id }, thumbBox(v), h('div', { class: 'vtitle', text: v.title || v.id }), h('div', { class: 'vsub', text: v.channel || '' }));
+}
+
+/* ------------------------------------------------------------ bottom sheets & menus */
+
+let currentSheet = null;
+function closeSheet() { if (currentSheet) currentSheet.close(); }
+function openSheet(title, ...children) {
+  closeSheet();
+  const backdrop = h('div', { class: 'backdrop', onclick: () => close() });
+  const body = h('div', { class: 'sbody' }, ...children);
+  const sheet = h('div', { class: 'sheet', role: 'dialog', 'aria-label': title || 'Menu' },
+    h('div', { class: 'grab' }),
+    title ? h('div', { class: 'shead' }, h('h3', { text: title }), h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Close', onclick: () => close() }, icon(ICONS.close))) : null,
+    body);
+  document.body.append(backdrop, sheet);
+  document.body.classList.add('sheet-open');
+  requestAnimationFrame(() => { backdrop.classList.add('show'); sheet.classList.add('show'); });
+  const ref = { close, body, sheet };
+  function close() {
+    backdrop.classList.remove('show');
+    sheet.classList.remove('show');
+    document.body.classList.remove('sheet-open');
+    setTimeout(() => { backdrop.remove(); sheet.remove(); }, 250);
+    if (currentSheet === ref) currentSheet = null;
+  }
+  currentSheet = ref;
+  return ref;
+}
+const menuItem = (path, label, onclick, href) => h(href ? 'a' : 'button', Object.assign({ class: 'menuitem', type: href ? null : 'button',
+  onclick: (e) => { closeSheet(); if (onclick) onclick(e); } }, href ? { href, target: href.startsWith('#') ? null : '_blank', rel: href.startsWith('#') ? null : 'noopener' } : {}),
+icon(path), h('span', { text: label }));
+
+const shareUrl = (url) => (navigator.share ? navigator.share({ url }).catch(() => {}) : navigator.clipboard.writeText(url).then(() => toast('Link copied')));
+function toggleLater(v) {
+  const has = later.some((x) => x.id === v.id);
+  if (has) later = later.filter((x) => x.id !== v.id);
+  else later.unshift({ id: v.id, title: v.title, channel: v.channel, channelId: v.channelId, dur: v.dur, published: v.published, views: v.views });
+  saveLater();
+  toast(has ? 'Removed from Watch later' : 'Saved to Watch later', { action: has ? null : 'View', onAction: () => { location.hash = '#/later'; } });
+  return !has;
+}
+function videoMenu(v) {
+  const url = 'https://www.youtube.com/watch?v=' + v.id;
+  const saved = later.some((x) => x.id === v.id);
+  openSheet(null,
+    menuItem(ICONS.later, saved ? 'Remove from Watch later' : 'Save to Watch later', () => { toggleLater(v); if (/^#\/later/.test(location.hash)) route(); }),
+    menuItem(ICONS.share, 'Share', () => shareUrl(url)),
+    v.channelId ? menuItem(ICONS.channel, 'Go to channel', null, '#/channel/' + v.channelId) : null,
+    menuItem(ICONS.copy, 'Copy link', () => navigator.clipboard.writeText(url).then(() => toast('Link copied'))),
+    menuItem(ICONS.open, 'Open in YouTube', null, url));
+}
+
+/* ------------------------------------------------------------ channel avatars */
+
+const avatarCache = new Map(Object.entries(store.get('avatars', {})));
+async function channelAvatars(ids) {
+  const need = Array.from(new Set(ids)).filter((id) => id && !avatarCache.has(id));
+  if (!need.length || !(signedIn() || settings.apiKey)) return;
+  for (let i = 0; i < need.length; i += 50) {
+    const j = await api('channels', { part: 'snippet', id: need.slice(i, i + 50).join(','), maxResults: 50 });
+    for (const it of j.items || []) avatarCache.set(it.id, (it.snippet.thumbnails.default || {}).url);
+  }
+  store.set('avatars', Object.fromEntries(Array.from(avatarCache.entries()).slice(-600)));
+}
+function fillAvatars(root) {
+  const imgs = Array.from(root.querySelectorAll('img[data-ch]'));
+  channelAvatars(imgs.map((i) => i.dataset.ch)).then(() => {
+    for (const img of imgs) { const u = avatarCache.get(img.dataset.ch); if (u && img.getAttribute('src') !== u) img.src = u; }
+  }).catch(() => {});
+}
+
 const notShort = (v) => !settings.hideShorts || v.dur > 61 || v.live;
 
 /* ------------------------------------------------------------ YouTube IFrame player */
@@ -418,21 +507,53 @@ let cleanup = [];
 let refreshHandler = null;
 const scrollPos = new Map();
 
-function setChrome({ title, back = false, tab, refresh = null }) {
+// Top bar: logo on the main tabs, back arrow + title on inner pages.
+function setChrome({ title = '', back = false, tab, refresh = null }) {
   titleEl.textContent = title;
+  titleEl.hidden = !title;
+  $('#logo').hidden = back || !!title;
+  $('#spacer').hidden = !!title;
   backBtn.hidden = !back;
   refreshHandler = refresh;
   refreshBtn.hidden = !refresh;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.tab === tab));
+  const me = $('#me-btn');
+  if (signedIn() && auth.thumb) {
+    if (!me.querySelector('img')) me.replaceChildren(h('img', { class: 'me', src: auth.thumb, alt: '' }));
+  } else if (me.querySelector('img')) {
+    me.replaceChildren(icon(ICONS.channel));
+  }
 }
 backBtn.addEventListener('click', () => { if (window.history.length > 1) window.history.back(); else location.hash = '#/'; });
 refreshBtn.addEventListener('click', () => refreshHandler && refreshHandler());
 
-// ---- Home: subscription feed
+// ---- Home: subscription feed with filter chips
+const CHIPS = [['all', 'All'], ['unwatched', 'Unwatched'], ['today', 'Today'], ['week', 'This week'], ['progress', 'Continue watching']];
+let homeChip = 'all';
 async function viewHome() {
-  setChrome({ title: 'ClearTube', tab: 'home', refresh: () => renderFeed(true) });
+  setChrome({ tab: 'home', refresh: () => renderFeed(true) });
+  const chips = h('div', { class: 'chips', role: 'tablist', hidden: true });
   const box = h('div', { class: 'feed' });
-  view.append(box);
+  view.append(chips, box);
+  let all = [];
+  const ageOk = (v, days) => v.published && Date.now() - new Date(v.published).getTime() < days * 864e5;
+  const FILTERS = {
+    all: () => true,
+    unwatched: (v) => !watched.some((w) => w.id === v.id),
+    today: (v) => ageOk(v, 1),
+    week: (v) => ageOk(v, 7),
+    progress: (v) => { const p = progressOf(v.id); return p > 0.02 && p < 0.95; }
+  };
+  const paintChips = () => chips.replaceChildren(...CHIPS.map(([key, label]) => h('button', {
+    class: 'chip' + (homeChip === key ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(homeChip === key), text: label,
+    onclick: () => { homeChip = key; paintChips(); renderList(); }
+  })));
+  function renderList() {
+    const vids = all.filter(FILTERS[homeChip] || FILTERS.all);
+    box.replaceChildren(...vids.map(videoCard));
+    if (!vids.length) box.replaceChildren(h('div', { class: 'empty', text: homeChip === 'all' ? 'No recent videos.' : 'Nothing here right now.' }));
+    fillAvatars(box);
+  }
   async function renderFeed(force) {
     box.replaceChildren(spinner());
     let channels = subs;
@@ -442,6 +563,7 @@ async function viewHome() {
     } catch (e) { box.replaceChildren(errorView(e)); return; }
     if (!channels.length) {
       const canSearch = signedIn() || settings.apiKey;
+      chips.hidden = true;
       box.replaceChildren(h('div', { class: 'empty' },
         h('h2', { text: 'Your feed is empty' }),
         h('p', { text: signedIn() ? 'Subscribe to channels and their new videos show up here.'
@@ -454,12 +576,13 @@ async function viewHome() {
     }
     try {
       const ttl = force ? 0 : settings.feedHours * 3600e3;
-      const lists = await Promise.all(channels.map((s) => cached('up:' + s.id, ttl, () => uploads(s.uploads || 'UU' + s.id.slice(2)).then((r) => r.ids.slice(0, 15)))
+      const lists = await Promise.all(channels.map((c) => cached('up:' + c.id, ttl, () => uploads(c.uploads || 'UU' + c.id.slice(2)).then((r) => r.ids.slice(0, 15)))
         .catch(() => [])));
       const ids = Array.from(new Set(lists.flat()));
-      const vids = (await videoDetails(ids)).filter(notShort).sort((a, b) => new Date(b.published) - new Date(a.published)).slice(0, 80);
-      box.replaceChildren(...vids.map(videoCard));
-      if (!vids.length) box.replaceChildren(h('div', { class: 'empty', text: 'No recent videos.' }));
+      all = (await videoDetails(ids)).filter(notShort).sort((a, b) => new Date(b.published) - new Date(a.published)).slice(0, 80);
+      chips.hidden = !all.length;
+      paintChips();
+      renderList();
     } catch (e) { box.replaceChildren(errorView(e)); }
   }
   await renderFeed(false);
@@ -468,7 +591,7 @@ async function viewHome() {
 // ---- Search
 async function viewSearch(params) {
   const q = params.get('q') || '';
-  setChrome({ title: 'Search', tab: 'search' });
+  setChrome({ title: 'Search', back: true, tab: null });
   const input = h('input', { type: 'search', placeholder: 'Search or paste a YouTube link', value: q, enterkeyhint: 'search', autocapitalize: 'off', autocorrect: 'off' });
   const form = h('form', { class: 'pad row', onsubmit: (e) => {
     e.preventDefault();
@@ -510,12 +633,12 @@ async function viewSearch(params) {
 
 // ---- Watch
 async function viewWatch(id, params) {
-  setChrome({ title: '', back: true, tab: null });
+  setChrome({ back: true, tab: null });
 
   const playerBox = h('div', { class: 'player' }, h('div', { id: 'ct-player' }));
-  const titleBox = h('div', { class: 'wtitle', text: '' });
-  const subLine = h('div', { class: 'pad small muted', style: { paddingTop: '0', paddingBottom: '0' } });
   const sbBar = h('div', { class: 'sbbar', hidden: true });
+  const titleBox = h('div', { class: 'wtitle', text: '' });
+  const metaLine = h('div', { class: 'wmeta' });
   const likeAct = h('button', { class: 'act', type: 'button', 'aria-label': 'Like' }, icon(ICONS.like), h('span', { text: '…' }));
   const dislikeAct = h('button', { class: 'act', type: 'button', 'aria-label': 'Dislike' }, icon(ICONS.dislike), h('span', { text: '…' }));
   const counts = { likes: null, dislikes: null };
@@ -525,35 +648,41 @@ async function viewWatch(id, params) {
     dislikeAct.classList.toggle('on', myRating === 'dislike');
     likeAct.lastChild.textContent = counts.likes != null ? fmtNum(counts.likes) : 'Like';
     dislikeAct.lastChild.textContent = counts.dislikes != null ? fmtNum(counts.dislikes) : 'Dislike';
+    paintMeta();
   };
   const setCounts = (v) => { if (v && v.likes != null) counts.likes = Number(v.likes); paintRating(); };
-  const laterBtn = h('button', { class: 'act', type: 'button' }, icon(ICONS.later), h('span', { text: 'Later' }));
+  const laterBtn = h('button', { class: 'act', type: 'button', 'aria-label': 'Save to Watch later' }, icon(ICONS.later), h('span', { text: 'Later' }));
   const watchUrl = 'https://www.youtube.com/watch?v=' + id;
   const acts = h('div', { class: 'acts' },
-    likeAct, dislikeAct, laterBtn,
-    h('button', { class: 'act', type: 'button', onclick: () => (navigator.share ? navigator.share({ url: watchUrl }).catch(() => {}) : navigator.clipboard.writeText(watchUrl).then(() => toast('Link copied'))) }, icon(ICONS.share), 'Share'),
-    h('button', { class: 'act', type: 'button', onclick: () => toast('Tap ⛶ (fullscreen) in the player, then the PiP icon in the top-left corner. Or start fullscreen and swipe home.', { timeout: 7000 }) }, icon(ICONS.pip), 'PiP'),
+    h('div', { class: 'seg' }, likeAct, dislikeAct),
+    h('button', { class: 'act', type: 'button', onclick: () => shareUrl(watchUrl) }, icon(ICONS.share), 'Share'),
+    laterBtn,
     h('a', { class: 'act', href: 'https://www.tool77.com/en/v/downloader?url=' + encodeURIComponent(watchUrl), target: '_blank', rel: 'noopener' }, icon(ICONS.download), 'Download'),
+    h('button', { class: 'act', type: 'button', onclick: () => toast('Tap ⛶ (fullscreen) in the player, then the PiP icon in the top-left corner. Or start fullscreen and swipe home.', { timeout: 7000 }) }, icon(ICONS.pip), 'PiP'),
     h('a', { class: 'act', href: watchUrl, target: '_blank', rel: 'noopener' }, icon(ICONS.open), 'YouTube'));
-  const chanRow = h('div', { class: 'chan' });
-  const desc = h('div', { class: 'desc clamped pad', style: { paddingTop: '4px' } });
-  const descToggle = h('button', { class: 'desc-toggle', type: 'button', text: 'Show more', onclick: () => {
-    const c = desc.classList.toggle('clamped');
-    descToggle.textContent = c ? 'Show more' : 'Show less';
-  } });
-  const more = h('div', {});
-  const commentsBox = h('div', {});
-  view.append(playerBox, titleBox, subLine, sbBar, acts, chanRow, desc, descToggle, h('div', { class: 'section', text: 'More from this channel' }), more, commentsBox);
+  const ownerRow = h('div', { class: 'owner chan' });
+  const commentsCard = h('button', { class: 'ccard', type: 'button', hidden: true });
+  const upnext = h('div', { class: 'feed upnext' });
+  view.append(playerBox, sbBar, h('div', { class: 'wpanel' }, titleBox, metaLine, ownerRow, acts, commentsCard, upnext));
 
-  // Basic info works without an API key (oEmbed), details need one.
+  // Basic info works without an account or key (oEmbed); details need one.
   let info = detailCache.get(id) || null;
+  let channel = null;
+  function paintMeta() {
+    if (!info) return;
+    metaLine.replaceChildren(
+      h('b', { text: (channel && channel.handle) || info.channel || '' }),
+      counts.likes != null ? h('span', { text: fmtNum(counts.likes) + ' likes' }) : null,
+      info.views ? h('span', { text: fmtNum(info.views) + ' views' }) : null,
+      info.published ? h('span', { text: ago(info.published) }) : null,
+      h('button', { class: 'moreb', type: 'button', text: 'more', onclick: showDescription }));
+  }
   const fillInfo = (v) => {
     info = v;
     titleBox.textContent = v.title;
     document.title = v.title + ' · ClearTube';
-    subLine.textContent = [v.views ? fmtNum(v.views) + ' views' : '', v.published ? ago(v.published) : ''].filter(Boolean).join(' · ');
     setCounts(v);
-    if (v.description) { desc.replaceChildren(...linkify(v.description)); } else { desc.hidden = true; descToggle.hidden = true; }
+    if (!channel) renderOwner({ id: v.channelId, title: v.channel });
   };
   if (info) fillInfo(info);
   else {
@@ -561,28 +690,47 @@ async function viewWatch(id, params) {
       if (o && !info) fillInfo({ id, title: o.title, channel: o.author_name, description: '' });
     }).catch(() => {});
   }
-  if (settings.apiKey) {
+  if (signedIn() || settings.apiKey) {
     videoDetails([id], { fresh: true }).then(async ([v]) => {
       if (!v) return;
       fillInfo(v);
       const c = await channelInfo(v.channelId).catch(() => null);
       if (!c) return;
-      renderChannelRow(c);
+      channel = c;
+      renderOwner(c);
+      paintMeta();
       const r = await uploads(c.uploads).catch(() => null);
       const vs = r ? await videoDetails(r.ids.filter((x) => x !== id).slice(0, 12)).catch(() => []) : [];
-      more.replaceChildren(...vs.filter(notShort).map(compactCard));
+      upnext.replaceChildren(...vs.filter(notShort).map(videoCard));
+      fillAvatars(upnext);
     }).catch((e) => { if (!(e instanceof NeedKeyError)) toast(explainError(e)); });
   } else {
-    more.replaceChildren(h('p', { class: 'pad small muted', text: 'Add an API key in Settings to see more videos, views and the channel.' }));
+    upnext.replaceChildren(h('p', { class: 'pad small muted', text: 'Sign in with Google (or add an API key) in Settings to see more videos, views, comments and the channel.' }));
   }
 
-  function renderChannelRow(c) {
-    const btn = subscribeButton(c);
-    chanRow.replaceChildren(
-      h('a', { href: '#/channel/' + c.id, class: 'row', style: { flex: '1', minWidth: '0', textDecoration: 'none', color: 'inherit' } },
-        h('img', { class: 'avatar', src: c.thumb, alt: '' }),
-        h('div', { style: { minWidth: '0' } }, h('div', { class: 'vtitle', text: c.title }), h('div', { class: 'vsub', text: fmtNum(c.subs) + ' subscribers' }))),
-      btn);
+  // Avatar, name, subscriber count and the Subscribe pill.
+  function renderOwner(c) {
+    if (!c || !c.title) return;
+    ownerRow.replaceChildren(
+      h('a', { href: c.id ? '#/channel/' + c.id : null },
+        h('img', { class: 'avatar', src: c.thumb || avatarCache.get(c.id) || null, alt: '' }),
+        h('div', { style: { minWidth: '0' } }, h('div', { class: 'name', text: c.title }),
+          c.subs ? h('div', { class: 'vsub', text: fmtNum(c.subs) + ' subscribers' }) : null)),
+      c.uploads ? subscribeButton(c) : null);
+  }
+
+  // Description sheet ("more"): title, likes / views / date, description.
+  function showDescription() {
+    if (!info) return;
+    const date = info.published ? new Date(info.published) : null;
+    openSheet('Description',
+      h('div', { class: 'pad' },
+        h('div', { class: 'vtitle', text: info.title, style: { webkitLineClamp: 'unset', fontSize: '17px', fontWeight: '700' } }),
+        h('div', { class: 'stats' },
+          h('div', {}, h('b', { text: counts.likes != null ? fmtNum(counts.likes) : '–' }), h('span', { text: 'Likes' })),
+          h('div', {}, h('b', { text: info.views ? fmtNum(info.views) : '–' }), h('span', { text: 'Views' })),
+          h('div', {}, h('b', { text: date ? date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '–' }), h('span', { text: date ? String(date.getFullYear()) : '' }))),
+        h('div', { class: 'desc' }, ...(info.description ? linkify(info.description) : ['No description.']))));
   }
 
   // Watch later
@@ -590,9 +738,7 @@ async function viewWatch(id, params) {
   const syncLater = () => { laterBtn.classList.toggle('on', inLater()); laterBtn.lastChild.textContent = inLater() ? 'Saved' : 'Later'; };
   syncLater();
   laterBtn.addEventListener('click', () => {
-    if (inLater()) later = later.filter((x) => x.id !== id);
-    else later.unshift({ id, title: info ? info.title : id, channel: info && info.channel, channelId: info && info.channelId, dur: info && info.dur });
-    saveLater();
+    toggleLater(Object.assign({ id, title: id }, info || {}, { id }));
     syncLater();
   });
 
@@ -626,21 +772,26 @@ async function viewWatch(id, params) {
   likeAct.addEventListener('click', () => rate('like'));
   dislikeAct.addEventListener('click', () => rate('dislike'));
 
-  // Comments (top 20 by relevance).
+  // Comments: a card with the top comment; tapping opens all of them.
   if (signedIn() || settings.apiKey) {
     api('commentThreads', { part: 'snippet', videoId: id, maxResults: 20, order: 'relevance', textFormat: 'plainText' }).then((j) => {
       const items = j.items || [];
       if (!items.length) return;
-      commentsBox.append(h('div', { class: 'section', text: 'Comments' + (info && info.comments ? ' · ' + fmtNum(info.comments) : '') }),
-        ...items.map((it) => {
-          const c = it.snippet.topLevelComment.snippet;
-          return h('div', { class: 'comment' },
-            h('img', { class: 'avatar', src: c.authorProfileImageUrl, alt: '', loading: 'lazy' }),
-            h('div', { style: { minWidth: '0' } },
-              h('div', { class: 'vsub', text: [c.authorDisplayName, ago(c.publishedAt)].join(' · ') }),
-              h('div', { class: 'desc', text: c.textDisplay }),
-              h('div', { class: 'vsub', text: [c.likeCount ? '👍 ' + fmtNum(c.likeCount) : '', it.snippet.totalReplyCount ? it.snippet.totalReplyCount + ' replies' : ''].filter(Boolean).join(' · ') })));
-        }));
+      const first = items[0].snippet.topLevelComment.snippet;
+      const total = info && info.comments ? fmtNum(info.comments) : String(items.length);
+      commentsCard.replaceChildren(
+        h('div', { class: 'ctitle' }, 'Comments', h('span', { text: total })),
+        h('div', { class: 'cprev' }, h('img', { class: 'avatar', src: first.authorProfileImageUrl, alt: '' }), h('div', { text: first.textDisplay })));
+      commentsCard.hidden = false;
+      commentsCard.onclick = () => openSheet('Comments', ...items.map((it) => {
+        const c = it.snippet.topLevelComment.snippet;
+        return h('div', { class: 'comment' },
+          h('img', { class: 'avatar', src: c.authorProfileImageUrl, alt: '', loading: 'lazy' }),
+          h('div', { style: { minWidth: '0' } },
+            h('div', { class: 'vsub', text: [c.authorDisplayName, ago(c.publishedAt)].join(' · ') }),
+            h('div', { class: 'desc', text: c.textDisplay }),
+            h('div', { class: 'vsub', text: [c.likeCount ? '👍 ' + fmtNum(c.likeCount) : '', it.snippet.totalReplyCount ? it.snippet.totalReplyCount + ' replies' : ''].filter(Boolean).join(' · ') })));
+      }));
     }).catch(() => { /* comments disabled or unavailable */ });
   }
 
@@ -717,7 +868,7 @@ async function viewWatch(id, params) {
       } else {
         const parts = m[2].split(':').map(Number);
         const sec = parts.reduce((a, b) => a * 60 + b, 0);
-        out.push(h('button', { class: 'ts', type: 'button', text: m[2], onclick: () => { if (player && player.seekTo) { player.seekTo(sec, true); window.scrollTo({ top: 0, behavior: 'smooth' }); } } }));
+        out.push(h('button', { class: 'ts', type: 'button', text: m[2], onclick: () => { if (player && player.seekTo) { player.seekTo(sec, true); closeSheet(); window.scrollTo({ top: 0, behavior: 'smooth' }); } } }));
       }
       last = re.lastIndex;
     }
@@ -805,48 +956,95 @@ async function viewChannel(idOrHandle) {
   } catch (e) { list.replaceChildren(errorView(e)); }
 }
 
-// ---- Library
+// ---- Subscriptions: avatar strip + newest uploads, or the channel list
+async function viewSubs() {
+  setChrome({ tab: 'subs', refresh: () => render(true) });
+  const strip = h('div', { class: 'avstrip' });
+  const head = h('div', { class: 'section' }, h('span', { text: 'Subscriptions' }));
+  const list = h('div', {});
+  view.append(strip, head, list);
+  async function render(force) {
+    list.replaceChildren(spinner());
+    let channels;
+    try { channels = signedIn() ? await mySubscriptions(force) : subs; } catch (e) { list.replaceChildren(errorView(e)); return; }
+    head.firstChild.textContent = `Subscriptions (${channels.length})`;
+    if (!channels.length) {
+      strip.hidden = true;
+      list.replaceChildren(h('div', { class: 'empty' }, h('h2', { text: 'No subscriptions yet' }),
+        h('p', { text: signedIn() ? 'Channels you subscribe to on YouTube show up here.' : 'Sign in with Google to use your YouTube subscriptions, or subscribe to channels here (stored on this iPhone).' }),
+        h('div', { class: 'row', style: { justifyContent: 'center', flexWrap: 'wrap' } },
+          signedIn() ? null : h('button', { class: 'btn primary', type: 'button', text: 'Sign in with Google', onclick: () => signIn() }),
+          signedIn() ? null : h('a', { class: 'btn', href: '#/library', text: 'Import' }))));
+      return;
+    }
+    const sorted = channels.slice().sort((a, b) => a.title.localeCompare(b.title));
+    strip.hidden = false;
+    strip.replaceChildren(...sorted.slice(0, 30).map((c) => h('a', { href: '#/channel/' + c.id },
+      h('img', { class: 'avatar', src: c.thumb, alt: '', loading: 'lazy' }), h('span', { text: c.title }))));
+    list.replaceChildren(...sorted.map((c) => h('a', { class: 'chan', href: '#/channel/' + c.id },
+      h('img', { class: 'avatar', src: c.thumb, alt: '', loading: 'lazy' }), h('div', { class: 'vtitle', text: c.title }))));
+  }
+  await render(false);
+}
+
+// ---- Watch later (kept on this iPhone; YouTube's own list is not readable by apps)
+function viewLater() {
+  setChrome({ title: 'Watch later', tab: 'later' });
+  if (!later.length) {
+    view.append(h('div', { class: 'empty' }, h('h2', { text: 'Nothing saved yet' }),
+      h('p', { text: 'Tap ⋮ on a video, or "Later" under the player, to save it here.' })));
+    return;
+  }
+  const box = h('div', { class: 'feed' }, ...later.map(videoCard));
+  view.append(h('p', { class: 'pad small muted', text: `${later.length} video${later.length === 1 ? '' : 's'} · stored on this iPhone` }), box);
+  fillAvatars(box);
+}
+
+// ---- History (this iPhone)
+function viewHistory() {
+  setChrome({ title: 'History', back: true, tab: null });
+  if (!watched.length) { view.append(h('div', { class: 'empty', text: 'Nothing watched yet.' })); return; }
+  view.append(h('div', { class: 'feed', style: { gap: '4px' } }, ...watched.slice(0, 200).map((x) => compactCard({ id: x.id, title: x.title || x.id, channel: x.channel, dur: x.dur }))),
+    h('button', { class: 'btn more', type: 'button', text: 'Clear history', onclick: () => {
+      if (confirm('Clear watch history?')) { watched = []; saveHistory(); toast('History cleared.'); route(); }
+    } }));
+}
+
+// ---- You: account, history, liked videos, playlists, settings
 function viewLibrary() {
-  setChrome({ title: 'Library', tab: 'library' });
-  const sec = (title, items, empty, link) => [h('div', { class: 'section row' }, h('span', { style: { flex: '1' }, text: title }),
-    link ? h('a', { class: 'small', href: link, text: 'See all' }) : null),
-  items.length ? h('div', {}, ...items) : h('p', { class: 'pad muted small', text: empty })];
-  const card = (x) => compactCard({ id: x.id, title: x.title || x.id, channel: x.channel, dur: x.dur });
-  const histCards = watched.slice(0, 30).map(card);
-  const continueCards = watched.filter((x) => x.dur && x.pos > 10 && x.pos / x.dur < 0.95).slice(0, 10).map(card);
-  const laterCards = later.map((x) => compactCard(x));
-  const chanRow = (c) => h('a', { class: 'chan', href: '#/channel/' + c.id },
-    h('img', { class: 'avatar', src: c.thumb, alt: '', loading: 'lazy' }), h('div', { class: 'vtitle', text: c.title }));
+  setChrome({ tab: 'library' });
+  const histCard = (x) => hCard({ id: x.id, title: x.title || x.id, channel: x.channel, dur: x.dur });
+  const sec = (title, link) => h('div', { class: 'section' }, h('span', { text: title }), link ? h('a', { href: link, text: 'View all' }) : null);
+  const hrow = (items, empty) => (items.length ? h('div', { class: 'hscroll' }, ...items) : h('p', { class: 'pad muted small', text: empty }));
+  const row = (path, label, href, extra) => h('a', { class: 'listrow', href }, icon(path), h('span', { style: { flex: '1' }, text: label }),
+    extra ? h('span', { class: 'small muted', text: extra }) : null);
+  const history = [sec('History', '#/history'), hrow(watched.slice(0, 20).map(histCard), 'Videos you watch show up here.')];
 
   if (signedIn()) {
-    // Your YouTube account: profile, liked videos, playlists, subscriptions.
     const account = h('div', { class: 'chan' }, spinner());
     const liked = h('div', {}, spinner());
     const lists = h('div', {}, spinner());
-    const subsBox = h('div', {}, spinner());
-    const subsTitle = h('span', { style: { flex: '1' }, text: 'Subscriptions' });
-    view.append(account,
-      ...sec('Continue watching', continueCards, 'Videos you start appear here.'),
-      h('div', { class: 'section row' }, h('span', { style: { flex: '1' }, text: 'Liked videos' }), h('a', { class: 'small', href: '#/liked', text: 'See all' })), liked,
-      h('div', { class: 'section', text: 'Your playlists' }), lists,
-      ...sec('Watch later (on this iPhone)', laterCards, 'Tap "Later" on a video to save it here. YouTube does not let apps read your YouTube Watch Later list.'),
-      h('div', { class: 'section row' }, subsTitle), subsBox,
-      ...sec('History (on this iPhone)', histCards, 'Nothing watched yet.'));
+    const subsRow = row(ICONS.channel, 'Subscriptions', '#/subs');
+    view.append(account, ...history,
+      sec('Liked videos', '#/liked'), liked,
+      sec('Playlists'), lists,
+      h('div', { style: { marginTop: '12px' } },
+        row(ICONS.later, 'Watch later', '#/later', String(later.length)),
+        subsRow,
+        row(ICONS.settings, 'Settings', '#/settings')));
     myChannel().then((me) => {
-      account.replaceChildren(h('img', { class: 'avatar', src: me && me.thumb, alt: '' }),
-        h('div', { style: { flex: '1', minWidth: '0' } }, h('div', { class: 'vtitle', text: me ? me.title : 'Signed in' }), h('div', { class: 'vsub', text: 'YouTube account' })),
-        h('a', { class: 'btn', href: '#/settings', text: 'Account' }));
+      setChrome({ tab: 'library' });
+      account.replaceChildren(h('img', { class: 'avatar', src: me && me.thumb, alt: '', style: { width: '64px', height: '64px' } }),
+        h('div', { style: { flex: '1', minWidth: '0' } }, h('div', { class: 'vtitle', text: me ? me.title : 'Signed in', style: { fontSize: '22px', fontWeight: '700' } }),
+          h('a', { class: 'vsub', href: '#/settings', text: 'Google account ›', style: { textDecoration: 'none', display: 'block' } })));
     }).catch((e) => account.replaceChildren(h('p', { class: 'pad small muted', text: explainError(e) })));
-    likedVideos().then((r) => liked.replaceChildren(...(r.vids.length ? r.vids.slice(0, 5).map(compactCard) : [h('p', { class: 'pad muted small', text: 'No liked videos yet.' })])))
+    likedVideos().then((r) => liked.replaceChildren(hrow(r.vids.slice(0, 12).map(hCard), 'No liked videos yet.')))
       .catch((e) => liked.replaceChildren(h('p', { class: 'pad small muted', text: explainError(e) })));
-    myPlaylists().then((pls) => lists.replaceChildren(...(pls.length ? pls.map((pl) => h('a', { class: 'compact', href: '#/playlist/' + pl.id },
+    myPlaylists().then((pls) => lists.replaceChildren(pls.length ? h('div', { class: 'hscroll' }, ...pls.map((pl) => h('a', { class: 'hcard', href: '#/playlist/' + pl.id },
       h('span', { class: 'thumb' }, h('img', { src: pl.thumb, alt: '', loading: 'lazy' }), h('span', { class: 'dur', text: pl.count + ' videos' })),
-      h('div', { style: { minWidth: '0' } }, h('div', { class: 'vtitle', text: pl.title }), h('div', { class: 'vsub', text: pl.privacy })))) : [h('p', { class: 'pad muted small', text: 'No playlists.' })])))
+      h('div', { class: 'vtitle', text: pl.title }), h('div', { class: 'vsub', text: pl.privacy || '' })))) : h('p', { class: 'pad muted small', text: 'No playlists.' })))
       .catch((e) => lists.replaceChildren(h('p', { class: 'pad small muted', text: explainError(e) })));
-    mySubscriptions().then((list) => {
-      subsTitle.textContent = `Subscriptions (${list.length})`;
-      subsBox.replaceChildren(...list.slice().sort((a, b) => a.title.localeCompare(b.title)).map(chanRow));
-    }).catch((e) => subsBox.replaceChildren(h('p', { class: 'pad small muted', text: explainError(e) })));
+    mySubscriptions().then((list) => { subsRow.children[1].textContent = `Subscriptions (${list.length})`; }).catch(() => {});
     return;
   }
 
@@ -855,21 +1053,21 @@ function viewLibrary() {
     const f = fileInput.files[0];
     if (f) importBox.value = await f.text();
   } });
-  const importCard = h('div', { class: 'card' },
-    h('div', { class: 'vtitle', text: 'Import subscriptions' }),
-    h('p', { class: 'small muted', text: 'Without signing in, subscriptions are stored only on this iPhone. To copy them from YouTube: takeout.google.com → YouTube and YouTube Music → subscriptions.csv.' }),
-    h('div', { class: 'field' }, importBox),
-    h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', text: 'Choose file', onclick: () => fileInput.click() }),
-      h('button', { class: 'btn primary', type: 'button', text: 'Import', onclick: () => importSubs(importBox.value) })), fileInput);
   view.append(
     h('div', { class: 'card' }, h('div', { class: 'vtitle', text: 'Your YouTube account' }),
       h('p', { class: 'small muted', text: 'Sign in to see your subscriptions, liked videos and playlists, and to like, dislike and subscribe.' }),
       h('button', { class: 'btn primary', type: 'button', text: 'Sign in with Google', onclick: () => signIn() })),
-    ...sec('Continue watching', continueCards, 'Videos you start appear here.'),
-    ...sec('Watch later', laterCards, 'Tap "Later" on a video to save it here.'),
-    ...sec(`Subscriptions (${subs.length})`, subs.slice().sort((a, b) => a.title.localeCompare(b.title)).map(chanRow), 'No subscriptions yet.'),
-    importCard,
-    ...sec('History', histCards, 'Nothing watched yet.'));
+    ...history,
+    h('div', { style: { marginTop: '12px' } },
+      row(ICONS.later, 'Watch later', '#/later', String(later.length)),
+      row(ICONS.channel, `Subscriptions (${subs.length})`, '#/subs'),
+      row(ICONS.settings, 'Settings', '#/settings')),
+    h('div', { class: 'card' },
+      h('div', { class: 'vtitle', text: 'Import subscriptions' }),
+      h('p', { class: 'small muted', text: 'Without signing in, subscriptions are stored only on this iPhone. To copy them from YouTube: takeout.google.com → YouTube and YouTube Music → subscriptions.csv.' }),
+      h('div', { class: 'field' }, importBox),
+      h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', text: 'Choose file', onclick: () => fileInput.click() }),
+        h('button', { class: 'btn primary', type: 'button', text: 'Import', onclick: () => importSubs(importBox.value) })), fileInput));
 }
 
 async function likedVideos(pageToken) {
@@ -941,7 +1139,7 @@ async function importSubs(text) {
 
 // ---- Settings
 function viewSettings() {
-  setChrome({ title: 'Settings', tab: 'settings' });
+  setChrome({ title: 'Settings', back: true, tab: null });
   const keyInput = h('input', { type: 'text', value: settings.apiKey, placeholder: 'AIza…', autocapitalize: 'off', autocorrect: 'off', spellcheck: false });
   const sw = (label, get, set, help) => h('label', { class: 'switch' }, h('span', {}, label, help ? h('div', { class: 'small muted', text: help }) : null),
     h('input', { type: 'checkbox', checked: get(), onchange: (e) => { set(e.target.checked); saveSettings(); } }));
@@ -1020,6 +1218,7 @@ const isStandalone = () => window.navigator.standalone === true || matchMedia('(
 /* ------------------------------------------------------------ router */
 
 function route() {
+  closeSheet();
   scrollPos.set(currentKey, window.scrollY);
   cleanup.forEach((fn) => { try { fn(); } catch (_) { /* ignore */ } });
   cleanup = [];
@@ -1035,6 +1234,9 @@ function route() {
   else if (parts[0] === 'search') p = viewSearch(params);
   else if (parts[0] === 'channel' && parts[1]) p = viewChannel(parts[1]);
   else if (parts[0] === 'library') p = viewLibrary();
+  else if (parts[0] === 'subs') p = viewSubs();
+  else if (parts[0] === 'later') p = viewLater();
+  else if (parts[0] === 'history') p = viewHistory();
   else if (parts[0] === 'liked') p = viewList('liked');
   else if (parts[0] === 'playlist' && parts[1]) p = viewList('playlist', parts[1]);
   else if (parts[0] === 'settings') p = viewSettings();

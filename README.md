@@ -36,6 +36,20 @@ separate web app that builds the YouTube features in, so it works full screen wi
 - Dark mode, 44 pt controls, safe areas for the notch and home bar; opens offline (app shell cached)
 - Your ad blocker keeps working inside it
 
+The layout follows the familiar mobile YouTube pattern, drawn with ClearTube's own code and icons:
+
+- **Bottom bar:** Home · Subscriptions · Later · You
+- **Top bar:** search and your account picture
+- **Home:** filter chips (All, Unwatched, Today, This week, Continue watching) and full-width cards with
+  channel pictures and a ⋮ menu (Save to Watch later, Share, Go to channel, Copy link, Open in YouTube)
+- **Watch page:**
+  - title, plus a meta line whose **more** opens the description
+  - channel row with the Subscribe pill
+  - one combined 👍 | 👎 pill and a scrolling row of Share / Later / Download / PiP / YouTube
+  - a comments card that opens all comments
+  - more videos from the channel
+- **You:** history and liked videos as swipeable rows, your playlists, Watch later, subscriptions, Settings
+
 What YouTube's API doesn't allow, for any app: reading your YouTube **watch history** or **Watch Later** list
 (ClearTube keeps its own on the phone), and embedded playback doesn't count toward your YouTube history or give
 Premium's ad-free playback. Sign-in lasts an hour at a time and renews itself quietly (a quick hop to Google and
@@ -52,7 +66,7 @@ web apps.
    3. **Credentials → Create credentials → OAuth client ID → Web application**, with
       - Authorized JavaScript origin: `https://<user>.github.io`
       - Authorized redirect URI: `https://<user>.github.io/<repo>/`
-4. In ClearTube: **Settings → One-time setup** → paste the client ID → **Sign in with Google**. Google shows an
+4. In ClearTube: **You → Settings → One-time setup** → paste the client ID → **Sign in with Google**. Google shows an
    "unverified app" notice because the app is yours; continue past it.
 
 An API key (Credentials → API key) is optional: it's only used for search and channels while you're signed out.
