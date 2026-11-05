@@ -170,9 +170,16 @@ await test('installs as a full-screen home-screen app', {}, async ({ page }) => 
   const tabH = await page.evaluate(() => document.querySelector('nav.tabs').getBoundingClientRect().height);
   assert(tabH >= 52, 'tab bar is tall enough to tap: ' + tabH);
   const shown = (sel) => page.evaluate((x) => getComputedStyle(document.querySelector(x)).display !== 'none', sel);
-  await page.goto(APP + '#/search');
+  await page.goto(APP + '#/later');
   await sleep(100);
   assert(!(await shown('#back')) && !(await shown('#refresh')), 'no back/refresh button on top-level tabs');
+  assert(await shown('#search-btn') && await shown('#me-btn'), 'search and account buttons in the top bar');
+  await page.goto(APP + '#/');
+  await sleep(100);
+  assert(await shown('#logo') && await shown('#refresh') && !(await shown('#back')), 'logo + refresh on Home');
+  await page.goto(APP + '#/search');
+  await sleep(100);
+  assert(await shown('#back'), 'back button on Search');
   await page.goto(APP + '#/watch/' + VID);
   await sleep(100);
   assert(await shown('#back') && !(await shown('#refresh')), 'back button on the watch page');
@@ -181,7 +188,7 @@ await test('installs as a full-screen home-screen app', {}, async ({ page }) => 
 await test('without an API key: pasted link plays with SponsorBlock, dislikes, resume and history', {}, async ({ page, calls }) => {
   await page.goto(APP);
   assert(/paste a YouTube link/i.test(await text(page, 'main')), 'onboarding explains keyless use');
-  await page.tap('a[data-tab="search"]');
+  await page.tap('#search-btn');
   await page.fill('input[type=search]', `https://youtu.be/${VID}?si=x`);
   await page.press('input[type=search]', 'Enter');
   await until(() => page.evaluate(() => location.hash === '#/watch/dQw4w9WgXcQ'), 3000, 'watch route');
@@ -222,13 +229,18 @@ await test('with an API key: search, watch, subscribe, home feed, library', { st
   await until(async () => (await text(page, '.wtitle')) === 'Never Gonna Give You Up', 3000, 'title');
   await until(async () => /4\.3K/.test(await text(page, '.acts')) && /87/.test(await text(page, '.acts')), 3000, 'likes + dislikes');
   await until(() => page.$('.chan button'), 3000, 'channel row');
-  // Description: timestamp seeks the player
+  // Description: "more" opens it in a sheet; a timestamp seeks the player and closes the sheet
+  await until(() => page.$('.wmeta .moreb'), 3000, 'more button');
+  await page.tap('.wmeta .moreb');
+  await until(() => page.$('.sheet.show .desc .ts'), 2000, 'description sheet');
   await page.evaluate(() => { const b = Array.from(document.querySelectorAll('.desc .ts')).find((x) => x.textContent === '1:05'); b.click(); });
   assert(await page.evaluate(() => window.__seeks && window.__seeks.includes(65)), 'timestamp seek');
-  await until(() => page.$$eval('.compact', (n) => n.length >= 1), 3000, 'more from channel');
+  await until(() => page.evaluate(() => !document.querySelector('.sheet')), 2000, 'sheet closed');
+  await until(() => page.$$eval('.upnext .vcard', (n) => n.length >= 1), 3000, 'more from channel');
   await page.tap('.chan button');
   assert(/Subscribed to Test Channel/.test(await toastText(page)), 'subscribed');
-  await page.tap('.acts button:nth-of-type(1)'); // Later
+  await page.tap('button[aria-label="Save to Watch later"]');
+  assert(/Saved to Watch later/.test(await toastText(page)), 'saved for later');
   await page.tap('a[data-tab="home"]');
   await until(() => page.$$eval('.vcard', (n) => n.length === 3), 4000, 'feed with 3 uploads');
   const order = await page.$$eval('.vcard .vtitle', (n) => n.map((x) => x.textContent));
@@ -282,7 +294,9 @@ await test('Google sign-in: settings → Google → back to Library with the acc
   assert(calls.includes('oauth:select_account:CLIENT.apps.googleusercontent.com:token'), 'OAuth request: ' + calls.filter((c) => c.startsWith('oauth')));
   await until(async () => /Signed in with Google/.test(await toastText(page) || ''), 3000, 'signed-in toast');
   const lib = await until(async () => { const t = await text(page, 'main'); return /Me Myself/.test(t) && /Subscriptions \(2\)/.test(t) && /My Mix/.test(t) && /Second video/.test(t) && t; }, 4000, 'account library');
-  assert(/Other Channel/.test(lib), 'account subscriptions listed');
+  await page.tap('a[data-tab="subs"]');
+  await until(async () => /Other Channel/.test(await text(page, 'main')), 3000, 'account subscriptions listed');
+  await page.goto(APP + '#/library');
   assert(!calls.some((c) => c.includes('#key')) && calls.some((c) => c.startsWith('subscriptions@TOKEN1')), 'requests use the account token, not a key');
   assert(await page.evaluate(() => !/access_token/.test(location.href)), 'token removed from the address');
   // Liked videos & playlist pages
@@ -305,7 +319,9 @@ await test('signed in: home feed from YouTube subscriptions; like, dislike, comm
   await until(() => page.evaluate(() => document.querySelector('button[aria-label="Dislike"]').classList.contains('on') && !document.querySelector('button[aria-label="Like"]').classList.contains('on')), 2000, 'switched to dislike');
   assert(/88/.test(await text(page, 'button[aria-label="Dislike"]')), 'dislike count +1');
   assert(calls.includes('videos/rate:POST@TOKEN1=dislike'), 'rated dislike');
-  await until(async () => /Great video!/.test(await text(page, 'main')), 3000, 'comments');
+  await until(async () => /Great video!/.test(await text(page, '.ccard') || ''), 3000, 'comments card');
+  await page.tap('.ccard');
+  await until(() => page.$('.sheet.show .comment'), 2000, 'comments sheet');
   assert(/3 replies/.test(await text(page, '.comment')), 'reply count');
 });
 
@@ -344,6 +360,21 @@ await test('a sign-in answer with the wrong state is rejected', {}, async ({ pag
 
 if (shotsDir) {
   await test('screenshots (signed in)', { storage: SIGNED_IN(), dark: true }, async ({ page }) => {
+    await page.goto(APP);
+    await until(() => page.$$eval('.vcard', (n) => n.length === 3), 4000, 'feed');
+    await sleep(400);
+    await page.screenshot({ path: `${shotsDir}/ct-home.png` });
+    await page.goto(APP + '#/watch/' + VID);
+    await until(async () => /Great video!/.test(await text(page, '.ccard') || ''), 4000, 'watch');
+    await sleep(400);
+    await page.screenshot({ path: `${shotsDir}/ct-watch-signed-in.png` });
+    await page.tap('.wmeta .moreb');
+    await sleep(400);
+    await page.screenshot({ path: `${shotsDir}/ct-description.png` });
+    await page.goto(APP + '#/subs');
+    await until(async () => /Other Channel/.test(await text(page, 'main') || ''), 4000, 'subs');
+    await sleep(300);
+    await page.screenshot({ path: `${shotsDir}/ct-subs.png` });
     await page.goto(APP + '#/library');
     await until(async () => /My Mix/.test(await text(page, 'main') || ''), 4000, 'library');
     await sleep(300);
