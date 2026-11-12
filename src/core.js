@@ -433,6 +433,13 @@
     .note { color: var(--mut); font-size: 12px; margin-top: 10px; }
     .banner { background: rgba(10,132,255,.14); border-radius: 10px; padding: 10px 12px; margin: 8px 0; font-size: 14px; }
     .orb { display: none; }
+    .pick { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 54px; padding: 8px 14px; border: 0; border-bottom: 1px solid var(--line);
+      background: none; color: var(--fg); font: inherit; text-align: left; }
+    .pick:last-child { border-bottom: 0; }
+    .pick:active { background: var(--line); }
+    .pick .pl { flex: 1; min-width: 0; font-weight: 600; }
+    .pick .ps { color: var(--mut); font-size: 13px; white-space: nowrap; }
+    .pick svg { flex: none; color: var(--acc); }
     .pill { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 9px; font-size: 11px; font-weight: 600; line-height: 16px;
       background: rgba(52,199,89,.2); color: #1a8f3c; vertical-align: 1px; }
     @keyframes rise { from { transform: translateY(36px); opacity: 0; } }
@@ -516,6 +523,8 @@
       box-shadow: 0 2px 9px rgba(0,70,150,.16), inset 0 1px 0 #fff; }
     .aero .banner { border-radius: 14px; border: 1px solid rgba(255,255,255,.85); box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
       background: linear-gradient(180deg, rgba(120,210,255,.5), rgba(60,170,245,.26)); }
+    .aero .pick:active { background: linear-gradient(180deg, rgba(120,210,255,.5), rgba(60,170,245,.25)); }
+    .aero .pick .pl { color: var(--head); }
     .aero .pill { background: var(--leaf); color: #fff; border: 1px solid rgba(40,110,10,.5); text-shadow: 0 -1px 0 rgba(20,80,0,.5);
       box-shadow: inset 0 1px 0 rgba(255,255,255,.7); }
     /* "Options": a 30pt glass chip inside a 44pt tap target */
@@ -807,7 +816,7 @@
       log: (...a) => { if (state.core.debug) console.log(tag, ...a); },
       warn: (...a) => console.warn(tag, ...a),
       el, icon, addStyle, onReady, onLoad, onUrlChange, every, observe, waitFor,
-      request, toast, fab, pageRun, openTab, copy, menu, isGoogleHost, sha256, aeroCss,
+      request, toast, fab, pageRun, openTab, copy, menu, isGoogleHost, sha256, aeroCss, choose,
       storage: {
         get: (k, d) => storage.get(`ioss:${def.id}:${k}`, d),
         set: (k, v) => storage.set(`ioss:${def.id}:${k}`, v),
@@ -910,12 +919,45 @@
   /* ---------------------------------------------------- settings sheet */
 
   let panel = null;
+  let panelClosed = null; // callback of an open choose() sheet
   function closePanel() {
+    const cb = panelClosed;
+    panelClosed = null;
+    if (cb) cb();
     if (!panel) return;
     panel.forEach((n) => n.remove());
     panel = null;
     document.documentElement.style.removeProperty('overflow');
   }
+
+  // A small bottom sheet with a list of choices (e.g. video qualities).
+  // Resolves with the chosen item's value, or null when dismissed.
+  const CHEVRON = 'M9.3 6.3 7.9 7.7l4.3 4.3-4.3 4.3 1.4 1.4 5.7-5.7z';
+  function choose({ title, note, items }) {
+    return new Promise((resolve) => {
+      if (!isTop || !items || !items.length) return resolve(null);
+      whenBody(() => {
+        closePanel();
+        const { wrap } = ui();
+        let settled = false;
+        const finish = (v) => { if (settled) return; settled = true; panelClosed = null; closePanel(); resolve(v); };
+        const backdrop = el('div', { class: 'backdrop', onclick: () => finish(null) });
+        const sheet = el('div', { class: 'sheet', role: 'dialog', 'aria-label': title }, [
+          el('div', { class: 'grab' }),
+          el('div', { class: 'head' }, [el('span', { class: 'orb' }, [icon(DOWNLOAD_PATH, 17)]), el('h2', { text: title }),
+            el('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: () => finish(null) })]),
+          note ? el('div', { class: 'desc', text: note }) : null,
+          el('div', { class: 'card' }, items.map((it) => el('button', { class: 'pick', type: 'button', onclick: () => finish(it.value) }, [
+            el('span', { class: 'pl', text: it.label }), it.sub ? el('span', { class: 'ps', text: it.sub }) : null, icon(CHEVRON, 20)])))
+        ]);
+        wrap.appendChild(backdrop);
+        wrap.appendChild(sheet);
+        panel = [backdrop, sheet];
+        panelClosed = () => { if (!settled) { settled = true; resolve(null); } };
+      });
+    });
+  }
+  const DOWNLOAD_PATH = 'M5 20h14v-2H5v2zm7-3 6-6-1.41-1.41L13 13.17V4h-2v9.17L7.41 9.59 6 11l6 6z';
 
   function optionRow(def, mstate, opt) {
     const id = `o-${def.id}-${opt.key}`;

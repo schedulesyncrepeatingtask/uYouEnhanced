@@ -3,9 +3,11 @@
 // Each test serves a small fake copy of a site, loads the built userscript
 // with an in-memory GM API, and checks the behaviour of one module.
 //
-// Usage: node test/run.mjs [filter]
+// Usage: node test/run.mjs [filter]          (filter: part of a test name; a|b for several)
 //        SHOTS_DIR=/some/dir node test/run.mjs shots   (screenshots of the look)
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -103,7 +105,7 @@ async function withPage(t, fn) {
 }
 
 async function test(name, t, fn) {
-  if (filter && !name.includes(filter)) return;
+  if (filter && !filter.split('|').some((f) => name.includes(f))) return;
   const started = Date.now();
   try {
     await withPage(t, fn);
@@ -510,18 +512,27 @@ await test('save to photos: YouTube video is downloaded in ranges and offered to
   assert(opened.length === 0, 'no website opened');
 });
 
-await test('save to photos: falls back to the website when YouTube refuses', {
+await test('save to photos: no website when YouTube refuses (Retry instead); website only when allowed', {
   routes: {
     'https://m.youtube.com/youtubei/v1/player': { status: 200, contentType: 'application/json', body: '{"playabilityStatus":{"status":"LOGIN_REQUIRED"}}' },
     'https://m.youtube.com/watch': MYT_2026
   },
   xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
-}, async ({ page, opened, ui }) => {
+}, async ({ page, opened, ui, store }) => {
   await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
   await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
   await page.tap('.ioss-yt-dl');
-  await until(async () => (await ui('.toast .msg')).some((t) => /Couldn't save this video directly/.test(t.text)), 6000, 'failure toast');
-  assert(await clickToastAction(page, 'Open website'), 'fallback action');
+  await until(async () => (await ui('.toast .msg')).some((t) => /Couldn't save this video/.test(t.text)), 6000, 'failure toast');
+  assert(!(await clickToastAction(page, 'Website')) && await clickToastAction(page, 'Retry'), 'Retry offered, no website');
+  await sleep(800);
+  assert(opened.length === 0, 'nothing opened: ' + opened);
+  // With "Offer a downloader website" switched on.
+  store.set('ioss:state', JSON.stringify({ modules: { downloader: { settings: { siteFallback: true } } } }));
+  await page.reload();
+  await until(() => page.$('.ioss-yt-dl'), 4000, 'download button again');
+  await page.tap('.ioss-yt-dl');
+  await until(async () => (await ui('.toast .msg')).some((t) => /Couldn't save this video/.test(t.text)), 6000, 'failure toast 2');
+  assert(await clickToastAction(page, 'Website'), 'website button when allowed');
   await until(() => opened.length > 0, 2000, 'website opened');
   assert(opened[0].startsWith('https://www.tool77.com/'), 'fallback url: ' + opened[0]);
 });
@@ -545,6 +556,200 @@ await test('save to photos: other sites save the on-screen video file; streamed 
   await until(async () => (await ui('.fab.show')).length > 0, 4000, 'fab 2');
   await tapFab();
   await until(async () => (await ui('.toast .msg')).some((t) => /streams video in pieces/.test(t.text)), 4000, 'explained fallback');
+});
+
+// ---- Downloader 2.0: real media made with ffmpeg (skipped without it)
+const FF = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch (_) { return false; } })();
+const MEDIA = (() => {
+  if (!FF) return null;
+  const dir = mkdtempSync(join(tmpdir(), 'ioss-media-'));
+  const ff = (...a) => execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...a]);
+  const DASH = ['-movflags', '+dash+global_sidx'];
+  ff('-f', 'lavfi', '-i', 'testsrc=size=1280x720:rate=30:duration=4', '-c:v', 'libx264', '-bf', '2', '-g', '30', '-pix_fmt', 'yuv420p', '-an', ...DASH, '-f', 'mp4', join(dir, 'v.mp4'));
+  ff('-f', 'lavfi', '-i', 'sine=frequency=440:duration=4', '-c:a', 'aac', '-b:a', '128k', ...DASH, '-f', 'mp4', join(dir, 'a.mp4'));
+  return { dir, v: readFileSync(join(dir, 'v.mp4')), a: readFileSync(join(dir, 'a.mp4')) };
+})();
+const probeBytes = (b64, name) => {
+  const file = join(MEDIA.dir, name);
+  writeFileSync(file, Buffer.from(b64, 'base64'));
+  const p = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file]).toString());
+  const errors = execFileSync('ffmpeg', ['-hide_banner', '-v', 'error', '-i', file, '-f', 'null', '-'], { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+  return { streams: p.streams.map((x) => x.codec_type + ':' + x.codec_name + (x.height ? ':' + x.height : '')).sort(), duration: Number(p.format.duration), errors };
+};
+// Share sheet stub that keeps the file's bytes for ffprobe.
+const SHARE_KEEP = `<script>
+  navigator.canShare = () => true;
+  navigator.share = async ({ files }) => {
+    window.__shared = files.map((f) => ({ name: f.name, type: f.type, size: f.size }));
+    window.__bytes = await Promise.all(files.map(async (f) => { const u = new Uint8Array(await f.arrayBuffer()); let s = '';
+      for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); return btoa(s); }));
+  };
+</script>`;
+const ranged = (buf, type = 'video/mp4') => (url) => {
+  const m = url.match(/[?&]range=(\d+)-(\d+)/);
+  const body = m ? buf.subarray(+m[1], +m[2] + 1) : buf;
+  return { status: 200, contentType: type, headers: { 'access-control-allow-origin': '*' }, body };
+};
+const pickChoice = (page, label) => page.evaluate((l) => {
+  const b = Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.pick')).find((x) => x.querySelector('.pl').textContent === l);
+  if (!b) return false;
+  b.click();
+  return true;
+}, label);
+const choices = (page) => page.evaluate(() => Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.pick'), (b) => b.textContent));
+const GVB = 'https://rr2---sn-test.googlevideo.com/videoplayback?id=2';
+const playerHd = () => ({ status: 200, contentType: 'application/json', body: JSON.stringify({
+  playabilityStatus: { status: 'OK' },
+  videoDetails: { videoId: VIDEO_ID, title: 'HD: Test' },
+  streamingData: {
+    formats: [{ itag: 18, url: GVB + '&itag=18', mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"', height: 360, contentLength: String(MEDIA.v.length) }],
+    adaptiveFormats: [
+      { itag: 137, url: GVB + '&itag=137', mimeType: 'video/mp4; codecs="avc1.640028"', height: 1080, fps: 30, bitrate: 4e6, contentLength: '99000000' },
+      { itag: 136, url: GVB + '&itag=136', mimeType: 'video/mp4; codecs="avc1.4d401f"', height: 720, fps: 30, bitrate: 2e6, contentLength: String(MEDIA.v.length) },
+      { itag: 298, url: GVB + '&itag=298', mimeType: 'video/mp4; codecs="avc1.4d4020"', height: 720, fps: 60, bitrate: 3e6, contentLength: '5' },
+      { itag: 248, url: GVB + '&itag=248', mimeType: 'video/webm; codecs="vp9"', height: 1080, fps: 30, bitrate: 3e6, contentLength: '5' },
+      { itag: 140, url: GVB + '&itag=140', mimeType: 'audio/mp4; codecs="mp4a.40.2"', bitrate: 130000, contentLength: String(MEDIA.a.length) },
+      { itag: 139, url: GVB + '&itag=139', mimeType: 'audio/mp4; codecs="mp4a.40.5"', bitrate: 48000, contentLength: '5' }
+    ]
+  }
+}) });
+const gvHd = (url) => {
+  const itag = (url.match(/itag=(\d+)/) || [])[1];
+  if (itag === '136') return ranged(MEDIA.v)(url);
+  if (itag === '140') return ranged(MEDIA.a, 'audio/mp4')(url);
+  return { status: 403, body: '' };
+};
+
+if (FF) {
+  await test('youtube HD: quality picker; 720p picture + sound are joined into one video with both tracks', {
+    routes: {
+      'https://m.youtube.com/youtubei/v1/player': playerHd,
+      'https://m.youtube.com/watch': MYT_2026.replace('<body>', '<body>' + SHARE_KEEP),
+      'https://rr2---sn-test.googlevideo.com/': gvHd
+    },
+    xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
+  }, async ({ page, ui, opened }) => {
+    await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+    await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+    await page.tap('.ioss-yt-dl');
+    const list = await until(async () => { const c = await choices(page); return c.length && c; }, 6000, 'quality sheet');
+    assert(list.length === 4 && /^1080p video/.test(list[0]) && /^720p video/.test(list[1]) && /^360p video.*one file/.test(list[2]) && /^Sound only/.test(list[3]),
+      'H.264 qualities, 30 fps, one-file 360p and sound: ' + JSON.stringify(list));
+    assert(await pickChoice(page, '720p video'), 'picked 720p');
+    await until(async () => (await ui('.toast .msg')).some((t) => /Ready/.test(t.text)), 10000, 'ready');
+    await clickToastAction(page, 'Save');
+    const shared = await until(() => page.evaluate(() => window.__bytes && window.__shared), 5000, 'shared');
+    assert(shared[0].name === 'HD Test.mp4' && shared[0].type === 'video/mp4', 'file: ' + JSON.stringify(shared));
+    const p = probeBytes(await page.evaluate(() => window.__bytes[0]), 'yt720.mp4');
+    assert(JSON.stringify(p.streams) === JSON.stringify(['audio:aac', 'video:h264:720']), 'picture + sound: ' + JSON.stringify(p));
+    assert(Math.abs(p.duration - 4) < 0.2 && !p.errors.trim(), 'plays to the end without errors: ' + JSON.stringify(p));
+    assert(opened.length === 0, 'no website');
+  });
+
+  await test('youtube music: saves the sound as an .m4a without asking', {
+    routes: {
+      'https://music.youtube.com/youtubei/v1/player': playerHd,
+      'https://music.youtube.com/watch': html(SHARE_KEEP + '<ytmusic-player><video style="width:300px;height:300px"></video></ytmusic-player>'),
+      'https://rr2---sn-test.googlevideo.com/': gvHd
+    }
+  }, async ({ page, ui }) => {
+    await page.goto(`https://music.youtube.com/watch?v=${VIDEO_ID}`);
+    await until(async () => (await ui('.fab.show')).length > 0, 4000, 'floating button');
+    await page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.fab.show').click());
+    await until(async () => (await ui('.toast .msg')).some((t) => /Ready.*\n.*Save to Files/.test(t.text)), 8000, 'ready (sound)');
+    assert((await choices(page)).length === 0, 'no quality sheet');
+    await clickToastAction(page, 'Save');
+    const shared = await until(() => page.evaluate(() => window.__bytes && window.__shared), 5000, 'shared');
+    assert(shared[0].name === 'HD Test.m4a' && shared[0].type === 'audio/mp4', 'file: ' + JSON.stringify(shared));
+    const p = probeBytes(await page.evaluate(() => window.__bytes[0]), 'music.m4a');
+    assert(JSON.stringify(p.streams) === JSON.stringify(['audio:aac']) && !p.errors.trim(), 'ordinary m4a: ' + JSON.stringify(p));
+  });
+}
+
+const X_POST = html(SHARE_STUB + `<article><div data-testid="videoPlayer"><video style="width:340px;height:400px"></video></div>
+  <a href="/user/status/1790000000000000001">post</a><div role="group"><button>reply</button></div></article>
+  <script>document.querySelector('video').src = URL.createObjectURL(new MediaSource());</script>`);
+await test('x/twitter: the post button saves the MP4 from Twitter\'s embed data (HLS-only player)', {
+  routes: {
+    'https://x.com/home': X_POST,
+    'https://video.twimg.com/': (u) => ({ status: 200, contentType: 'video/mp4', headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(/480x852/.test(u) ? 4800 : 7200, 3) })
+  },
+  xhr: {
+    'https://cdn.syndication.twimg.com/tweet-result?id=1790000000000000001': { status: 200, text: JSON.stringify({ text: 'Funny cat https://t.co/abc',
+      video: { variants: [
+        { type: 'application/x-mpegURL', src: 'https://video.twimg.com/ext_tw_video/1/pu/pl/x.m3u8' },
+        { type: 'video/mp4', src: 'https://video.twimg.com/ext_tw_video/1/pu/vid/avc1/480x852/a.mp4' },
+        { type: 'video/mp4', src: 'https://video.twimg.com/ext_tw_video/1/pu/vid/avc1/720x1280/b.mp4' }
+      ] } }) }
+  }
+}, async ({ page, ui, opened, xhrLog }) => {
+  await page.goto('https://x.com/home');
+  await until(() => page.$('.ioss-x-dl'), 4000, 'post button');
+  await page.tap('.ioss-x-dl');
+  const list = await until(async () => { const c = await choices(page); return c.length && c; }, 6000, 'quality sheet');
+  assert(list.length === 2 && /^720p/.test(list[0]) && /^480p/.test(list[1]), 'qualities, no HLS: ' + JSON.stringify(list));
+  assert(xhrLog.some((x) => /tweet-result\?id=1790000000000000001&lang=en&token=[0-9a-z]+$/.test(x.url) && !/token=x$/.test(x.url)), 'embed token computed');
+  await pickChoice(page, '480p');
+  await until(async () => (await ui('.toast .msg')).some((t) => /Ready/.test(t.text)), 6000, 'ready');
+  await clickToastAction(page, 'Save');
+  const shared = await until(() => page.evaluate(() => window.__shared), 3000, 'shared');
+  assert(shared[0].name === 'Funny cat.mp4' && shared[0].size === 4800, 'file: ' + JSON.stringify(shared));
+  assert(opened.length === 0, 'no website');
+});
+
+await test('tiktok: saves the file from the page data when the player streams', {
+  routes: {
+    'https://www.tiktok.com/@u/video/7300000000000000001': html(SHARE_STUB + `<div><video style="width:340px;height:600px"></video></div>
+      <script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">{"other":{"id":"7300000000000000999","desc":"wrong","video":{"playAddr":"https:\\u002F\\u002Fv16-webapp.tiktok.com\\u002Fvideo\\u002Fwrong.mp4"}},
+      "pad":"${'x'.repeat(90000)}",
+      "item":{"id":"7300000000000000001","desc":"Dance time","video":{"playAddr":"https:\\u002F\\u002Fv16-webapp.tiktok.com\\u002Fvideo\\u002Ftos\\u002Fright.mp4?a=1\\u0026b=2"}}}</script>
+      <script>document.querySelector('video').src = URL.createObjectURL(new MediaSource());</script>`),
+    'https://v16-webapp.tiktok.com/': (u) => ({ status: 200, contentType: 'video/mp4', headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(/right\.mp4\?a=1&b=2/.test(u) ? 5100 : 10, 1) })
+  }
+}, async ({ page, ui }) => {
+  await page.goto('https://www.tiktok.com/@u/video/7300000000000000001');
+  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'floating button');
+  await page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.fab.show').click());
+  await until(async () => (await ui('.toast .msg')).some((t) => /Ready/.test(t.text)), 6000, 'ready');
+  await clickToastAction(page, 'Save');
+  const shared = await until(() => page.evaluate(() => window.__shared), 3000, 'shared');
+  assert(shared[0].name === 'Dance time.mp4' && shared[0].size === 5100, 'this video, not the other one: ' + JSON.stringify(shared));
+});
+
+await test('facebook: picks the HD file of this reel from the page data, not a neighbour\'s', {
+  routes: {
+    'https://www.facebook.com/reel/555000111': html(SHARE_STUB + `<div role="article"><video style="width:340px;height:600px"></video></div>
+      <script type="application/json">{"a":{"id":"444000999","playable_url_quality_hd":"https:\\/\\/video.xx.fbcdn.net\\/v\\/n1.mp4?x=1"},"pad":"${'y'.repeat(8000)}",
+      "b":{"id":"555000111","playable_url":"https:\\/\\/video.xx.fbcdn.net\\/v\\/s2.mp4?x=2","playable_url_quality_hd":"https:\\/\\/video.xx.fbcdn.net\\/v\\/h2.mp4?x=2"}}</script>
+      <script>document.querySelector('video').src = URL.createObjectURL(new MediaSource());</script>`),
+    'https://video.xx.fbcdn.net/': (u) => ({ status: 200, contentType: 'video/mp4', headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(/h2\.mp4/.test(u) ? 6200 : /s2/.test(u) ? 3100 : 11, 1) })
+  }
+}, async ({ page, ui }) => {
+  await page.goto('https://www.facebook.com/reel/555000111');
+  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'floating button');
+  await page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.fab.show').click());
+  await until(async () => (await ui('.toast .msg')).some((t) => /Ready/.test(t.text)), 6000, 'ready');
+  await clickToastAction(page, 'Save');
+  const shared = await until(() => page.evaluate(() => window.__shared), 3000, 'shared');
+  assert(shared[0].size === 6200, 'HD file of this reel: ' + JSON.stringify(shared));
+});
+
+await test('instagram feed: a streamed post is saved through its embed page', {
+  routes: {
+    'https://www.instagram.com/p/CODE123/embed/captioned/': html('<script>window.__additionalDataLoaded("x",{"shortcode_media":{"video_url":"https:\\/\\/scontent.cdninstagram.com\\/v\\/ig.mp4?e=1"}})</script>'),
+    'https://www.instagram.com/': html(SHARE_STUB + `<article><h2>Cat video</h2><video style="width:340px;height:500px"></video><a href="/p/CODE123/">2h</a></article>
+      <script>document.querySelector('video').src = URL.createObjectURL(new MediaSource());</script>`),
+    'https://scontent.cdninstagram.com/': { status: 200, contentType: 'video/mp4', headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(4400, 1) }
+  }
+}, async ({ page, ui, hits }) => {
+  await page.goto('https://www.instagram.com/');
+  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'floating button');
+  await page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.fab.show').click());
+  await until(async () => (await ui('.toast .msg')).some((t) => /Ready/.test(t.text)), 6000, 'ready');
+  assert(hits.some((h) => h.endsWith('/p/CODE123/embed/captioned/')), 'embed page used');
+  await clickToastAction(page, 'Save');
+  const shared = await until(() => page.evaluate(() => window.__shared), 3000, 'shared');
+  assert(shared[0].name === 'Cat video.mp4' && shared[0].size === 4400, 'file: ' + JSON.stringify(shared));
 });
 
 await test('youtube: Shorts keep the floating download button', {
@@ -1012,6 +1217,25 @@ if (process.env.SHOTS_DIR) {
       await page.screenshot({ path: `${dir}/sheet-bottom-${tag}.png` });
     });
   }
+  if (FF) await test('shots: quality picker', {
+    dark: false,
+    routes: { 'https://m.youtube.com/youtubei/v1/player': playerHd, 'https://m.youtube.com/watch': MYT_2026, 'https://rr2---sn-test.googlevideo.com/': gvHd },
+    store: { 'ioss:state': JSON.stringify({ core: { welcomed: true, lastCheck: Date.now() } }) },
+    xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
+  }, async ({ page }) => {
+    for (const dark of [false, true]) {
+      await page.emulateMedia({ colorScheme: dark ? 'dark' : 'light' });
+      await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}&d=${dark}`);
+      await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+      await page.tap('.ioss-yt-dl');
+      await until(async () => (await choices(page)).length > 0, 6000, 'sheet');
+      await sleep(500);
+      await page.screenshot({ path: `${dir}/picker-${dark ? 'dark' : 'light'}.png` });
+    }
+    await pickChoice(page, '720p video');
+    await sleep(150);
+    await page.screenshot({ path: `${dir}/picker-progress.png` });
+  });
   await test('shots: YouTube buttons, message and floating button', {
     dark: true,
     routes: { 'https://m.youtube.com/watch': (u) => (u.includes('v=new') ? MYT_2026 : MYT_WATCH), 'https://m.youtube.com/shorts': html('<body style="background:#111"><video style="width:100%;height:560px;background:linear-gradient(#345,#123)"></video>') },

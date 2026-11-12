@@ -12,7 +12,9 @@ jobs:
           node-version: 22
       - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: node build.mjs --check
+      - run: node test/mp4.mjs
       - run: node test/run.mjs
       - run: xvfb-run -a node test/isolated.mjs
       - run: node test/app.mjs

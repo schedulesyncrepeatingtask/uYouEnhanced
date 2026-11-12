@@ -15,7 +15,7 @@ module updates itself**.
 | SponsorBlock | Simple Sponsor Skipper 2026.03 | Skips sponsors, intros and other segments (with an **Undo** button) |
 | Return YouTube Dislike | Return YouTube Dislike 3.2.0-ios | Shows dislike counts on m.youtube.com, the desktop site and Shorts |
 | YouTube: PiP & player tweaks | YouTube PIP Button (iOS Safari) 1.3 | Picture-in-Picture button; optional "Shorts → normal player" and background play |
-| Video downloader | All-in-One Video Downloader 1.0.19 | Download button that saves the video to your camera roll (YouTube up to 360p), or opens a downloader website for HD, on YouTube, TikTok, Instagram, X, Threads, Facebook, Pinterest, Snapchat, TED, Spotify and more |
+| Video downloader | All-in-One Video Downloader 1.0.19 + ideas from All-in-One Video Downloader 2026 (classccai) | Saves videos straight to your camera roll, with a quality picker: YouTube up to 1080p (picture and sound joined on the phone), YouTube Music as sound, X, TikTok, Instagram, Facebook, Threads, Pinterest, Snapchat, TED and more. No downloader website |
 | Dark Mode | Dark Mode 护眼模式 1.5.8 | Dims, warms or inverts every site; skips sites that are already dark; can follow the iPhone's Dark Mode and switch by time of day |
 | Remove web limits | Remove web limits 网页限制解除 1.3 | Lets you select and copy text and use the long-press menu on sites that block it |
 | Clean tracking URLs | Clean Tracking URLs 跟踪链接净化 0.7.8 | Strips tracking parameters from links and the address bar, with extra rules for Bilibili, Baidu, CSDN, Taobao/Alibaba, Douyin/TikTok, Amazon, YouTube, Google, Reddit, LinkedIn, eBay, JD and more |
@@ -255,12 +255,25 @@ itself, which is the same trust you give any auto-updating userscript.
 - **Save to Photos (default):** tapping the button downloads the video inside Safari, then a **Save** button opens
   the share sheet, where **Save Video** puts it in the camera roll. iOS doesn't let web pages save to Photos
   without that last tap.
-  - YouTube: the suite asks YouTube's mobile-app API for the file and downloads it in 5 MB pieces. YouTube only
-    offers combined video+audio files up to **360p**; HD comes as separate video and audio streams that would need
-    merging, which isn't practical in Safari. For HD, switch the button to **Open downloader website**.
-  - Other sites: saved directly when the on-screen video plays from a real file. Sites that stream video in
-    pieces (common on Instagram, X and Facebook) fall back to the website, with a button in the message.
-  - Very large videos (over 800 MB) ask first, because the whole file is held in memory.
+  - A **quality sheet** opens when there's a real choice (YouTube, X). You can fix a quality in the options
+    instead (Best, up to 1080p, up to 720p, 360p, or Sound only).
+  - **YouTube:** the suite asks YouTube's mobile-app API for the files and downloads them in 5 MB pieces. Up to
+    360p comes as one file. **HD (720p, 1080p) comes as separate picture and sound files**, so the suite joins
+    them on the phone into one ordinary MP4 (no re-encoding, full quality). Only H.264 is offered, because Photos
+    can't store YouTube's VP9/AV1 qualities above 1080p. 30 fps is preferred unless you turn on 60 fps.
+  - **YouTube Music:** saves the sound as an `.m4a` (Save to Files).
+  - **X/Twitter:** its player only streams in pieces, so the suite reads the ordinary MP4 files from Twitter's
+    public embed data (with sound, every quality offered).
+  - **TikTok, Instagram, Facebook:** the file is taken from the on-screen player when it plays a real file,
+    otherwise from the page's own data, the post's embed page, `og:video`, or the files the player loaded. On a
+    feed it picks the post on screen; on Facebook it prefers the links closest to that video's id.
+  - **Other sites:** the on-screen video when it plays from a real file.
+  - It never opens a downloader website by itself. If saving fails, the message offers **Retry**. Turn on
+    "Offer a downloader website when saving fails" to also get a **Website** button (and Spotify support,
+    which only works through a website because songs are DRM-protected).
+  - Large videos (over 600 MB, adjustable) ask first, because the whole file is held in memory.
+  - The script these ideas came from also has two "cloud engines" (loader.to and snapwc). They aren't included:
+    they use another service's API keys and pretend to be that service's website.
 
 **Don't Track Me Google**
 - Its beacon, fetch and `href` guards were installed from the sandbox, where on Safari they don't affect the page.
@@ -299,10 +312,9 @@ itself, which is the same trust you give any auto-updating userscript.
 
 ## Privacy notes
 
-- **Downloader:** in the default "Save to Photos" mode, videos are fetched from YouTube or the site itself; nothing
-  is sent to a third party. In website mode, or when you tap "Open website" after a failed save, the video's page
-  URL is sent to the downloader service (tool77.com, as in the original). You can choose "Just copy the link"
-  instead.
+- **Downloader:** videos are fetched from YouTube or the site itself; nothing is sent to a third party. For X
+  posts, the post ID is sent to Twitter's own embed service (`cdn.syndication.twimg.com`). Only in website mode,
+  or when you turn on the website fallback and tap **Website**, is the video's page URL sent to tool77.com.
 - **SponsorBlock:** only the first 4 characters of the video ID's hash are sent (configurable).
 - **Return YouTube Dislike:** sends the video ID, and your vote unless you turn that off.
 - **Bypass All Shortlinks:** the "Route results through the author's blog" option is off by default.
@@ -313,6 +325,7 @@ itself, which is the same trust you give any auto-updating userscript.
 node build.mjs           # src/ -> dist/ (bundle, meta, per-module files, manifest with SHA-256)
 node build.mjs --check   # fail if dist/ is stale
 node test/run.mjs        # end-to-end tests in an emulated iPhone 13 mini (needs Playwright + Chromium)
+node test/mp4.mjs        # the downloader's MP4 joiner against real ffmpeg files (needs ffmpeg)
 node test/isolated.mjs   # same, but as a sandboxed content script, like Safari managers run it
 node test/app.mjs        # ClearTube web app, with fake YouTube/SponsorBlock/dislike services
 ```
@@ -347,6 +360,8 @@ This suite contains modified versions of:
 - **Remove web limits 网页限制解除** by Cat73 (LGPL-3.0)
 - **Clean Tracking URLs 跟踪链接净化** by cilxe
 - **All-in-One Video Downloader** by Daniel (MIT)
+- **All-in-One Video Downloader (2026)** by classccai, tenzaa.com (MIT): the site-specific ways of finding the
+  video file
 - **Bypass All Shortlinks** by Bloggerpemula, with thanks to @JustOlaf, @Konf, @hacker09, @juansi, @NotYou,
   @cunaqr, @Rust1667 and @varram (bloggerpemula.pythonanywhere.com)
 - **YouTube PIP Button (iOS Safari)**

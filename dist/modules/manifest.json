@@ -1,5 +1,5 @@
 {
-  "suite": "1.6.0",
+  "suite": "1.7.0",
   "api": 1,
   "modules": {
     "google-consent": {
@@ -67,10 +67,10 @@
     },
     "downloader": {
       "name": "Video downloader",
-      "version": "1.4.0",
+      "version": "2.0.0",
       "api": 1,
       "file": "downloader.js",
-      "sha256": "0f3d73012ff3fbee39a94d396dc22d868da2c1fa402471e6c8a3df7c8e8efd4e"
+      "sha256": "772820e15653e88829276082d8d202075b890eba7b41673ae28ac7626cf6d754"
     },
     "shortlinks": {
       "name": "Bypass All Shortlinks",
