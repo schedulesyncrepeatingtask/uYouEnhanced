@@ -395,6 +395,14 @@ const clickToastAction = (page, label) => page.evaluate((l) => {
   return true;
 }, label);
 
+const pickChoice = (page, label) => page.evaluate((l) => {
+  const b = Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.pick')).find((x) => x.querySelector('.pl').textContent === l);
+  if (!b) return false;
+  b.click();
+  return true;
+}, label);
+const choices = (page) => page.evaluate(() => Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.pick'), (b) => b.textContent));
+
 await test('aero look: glossy buttons in pages and in the settings sheet; "Plain" switches it off', {
   routes: { 'https://m.youtube.com/watch': MYT_2026 },
   store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { mode: 'service' } } } }) },
@@ -512,19 +520,26 @@ await test('save to photos: YouTube video is downloaded in ranges and offered to
   assert(opened.length === 0, 'no website opened');
 });
 
-await test('save to photos: no website when YouTube refuses (Retry instead); website only when allowed', {
+await test('save to photos: when YouTube refuses there is no website by default; Options offers retry, error details and (if allowed) the website', {
   routes: {
     'https://m.youtube.com/youtubei/v1/player': { status: 200, contentType: 'application/json', body: '{"playabilityStatus":{"status":"LOGIN_REQUIRED"}}' },
     'https://m.youtube.com/watch': MYT_2026
   },
   xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
-}, async ({ page, opened, ui, store }) => {
+}, async ({ page, opened, ui, store, clip }) => {
   await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
   await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
   await page.tap('.ioss-yt-dl');
-  await until(async () => (await ui('.toast .msg')).some((t) => /Couldn't save this video/.test(t.text)), 6000, 'failure toast');
-  assert(!(await clickToastAction(page, 'Website')) && await clickToastAction(page, 'Retry'), 'Retry offered, no website');
-  await sleep(800);
+  const msg = await until(async () => (await ui('.toast .msg')).find((t) => /Couldn't save this video/.test(t.text)), 6000, 'failure toast');
+  assert(/Play the video for a few seconds/.test(msg.text), 'hint to play first: ' + msg.text);
+  assert(await clickToastAction(page, 'Options'), 'Options button');
+  const list = await until(async () => { const c = await choices(page); return c.length && c; }, 3000, 'options sheet');
+  assert(list.length === 2 && /Try again/.test(list[0]) && /Copy error details/.test(list[1]), 'no website by default: ' + JSON.stringify(list));
+  await pickChoice(page, 'Copy error details');
+  await until(() => clip.length > 0, 2000, 'details copied');
+  assert(/ANDROID_VR 1\.65\.10: HTTP 200, LOGIN_REQUIRED, 0 links/.test(clip[0]) && /player: no stream links yet/.test(clip[0]) && /result: YouTube did not offer/.test(clip[0]),
+    'readable report: ' + clip[0]);
+  await sleep(300);
   assert(opened.length === 0, 'nothing opened: ' + opened);
   // With "Offer a downloader website" switched on.
   store.set('ioss:state', JSON.stringify({ modules: { downloader: { settings: { siteFallback: true } } } }));
@@ -532,7 +547,9 @@ await test('save to photos: no website when YouTube refuses (Retry instead); web
   await until(() => page.$('.ioss-yt-dl'), 4000, 'download button again');
   await page.tap('.ioss-yt-dl');
   await until(async () => (await ui('.toast .msg')).some((t) => /Couldn't save this video/.test(t.text)), 6000, 'failure toast 2');
-  assert(await clickToastAction(page, 'Website'), 'website button when allowed');
+  await clickToastAction(page, 'Options');
+  await until(async () => (await choices(page)).length === 3, 3000, 'website listed when allowed');
+  await pickChoice(page, 'Open downloader website');
   await until(() => opened.length > 0, 2000, 'website opened');
   assert(opened[0].startsWith('https://www.tool77.com/'), 'fallback url: ' + opened[0]);
 });
@@ -590,13 +607,6 @@ const ranged = (buf, type = 'video/mp4') => (url) => {
   const body = m ? buf.subarray(+m[1], +m[2] + 1) : buf;
   return { status: 200, contentType: type, headers: { 'access-control-allow-origin': '*' }, body };
 };
-const pickChoice = (page, label) => page.evaluate((l) => {
-  const b = Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.pick')).find((x) => x.querySelector('.pl').textContent === l);
-  if (!b) return false;
-  b.click();
-  return true;
-}, label);
-const choices = (page) => page.evaluate(() => Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.pick'), (b) => b.textContent));
 const GVB = 'https://rr2---sn-test.googlevideo.com/videoplayback?id=2';
 const playerHd = () => ({ status: 200, contentType: 'application/json', body: JSON.stringify({
   playabilityStatus: { status: 'OK' },
@@ -633,7 +643,7 @@ if (FF) {
     await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
     await page.tap('.ioss-yt-dl');
     const list = await until(async () => { const c = await choices(page); return c.length && c; }, 6000, 'quality sheet');
-    assert(list.length === 4 && /^1080p video/.test(list[0]) && /^720p video/.test(list[1]) && /^360p video.*one file/.test(list[2]) && /^Sound only/.test(list[3]),
+    assert(list.length === 5 && /^1080p video/.test(list[0]) && /^720p video/.test(list[1]) && /^360p video.*one file/.test(list[2]) && /^Sound only/.test(list[3]) && /^Thumbnail/.test(list[4]),
       'H.264 qualities, 30 fps, one-file 360p and sound: ' + JSON.stringify(list));
     assert(await pickChoice(page, '720p video'), 'picked 720p');
     await until(async () => (await ui('.toast .msg')).some((t) => /Ready/.test(t.text)), 10000, 'ready');
@@ -644,6 +654,90 @@ if (FF) {
     assert(JSON.stringify(p.streams) === JSON.stringify(['audio:aac', 'video:h264:720']), 'picture + sound: ' + JSON.stringify(p));
     assert(Math.abs(p.duration - 4) < 0.2 && !p.errors.trim(), 'plays to the end without errors: ' + JSON.stringify(p));
     assert(opened.length === 0, 'no website');
+  });
+
+  // The bug from the screenshot: YouTube's API links are refused (HTTP 403).
+  // The page's own player is streaming the video; its links are reused.
+  const GVP = 'https://rr5---sn-abc.googlevideo.com/videoplayback?expire=1&ip=1.2.3.4&id=o-p&mime=video%2Fmp4&pot=TOKEN&n=solved&c=MWEB';
+  await test('youtube 403: refused API links fall back to the links the page\'s own player is using', {
+    routes: {
+      'https://m.youtube.com/youtubei/v1/player': () => {
+        const r = JSON.parse(playerHd().body);
+        r.videoDetails.lengthSeconds = '4';
+        return { status: 200, contentType: 'application/json', body: JSON.stringify(r) };
+      },
+      'https://m.youtube.com/watch': MYT_2026.replace('<body>', '<body>' + SHARE_KEEP + `<script>
+        // What the player does while playing: small byte ranges of picture and sound,
+        // plus a short ad from the same servers.
+        for (const [itag, len, dur] of [[136, ${MEDIA ? MEDIA.v.length : 1}, '4.000'], [140, ${MEDIA ? MEDIA.a.length : 1}, '4.010'], [135, 999, '15.000']])
+          fetch('${GVP}&itag=' + itag + '&clen=' + len + '&dur=' + dur + '&range=0-999&rn=1&rbuf=0');
+      </script>`),
+      'https://rr2---sn-test.googlevideo.com/': () => ({ status: 403, body: '' }),
+      'https://rr5---sn-abc.googlevideo.com/': (u) => {
+        const itag = (u.match(/itag=(\d+)/) || [])[1];
+        if (!/pot=TOKEN/.test(u) || /rn=|rbuf=/.test(u)) return { status: 403, body: '' };
+        return itag === '136' ? ranged(MEDIA.v)(u) : itag === '140' ? ranged(MEDIA.a, 'audio/mp4')(u) : { status: 200, headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(999) };
+      }
+    },
+    xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
+  }, async ({ page, ui, hits }) => {
+    await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+    await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+    await sleep(300);
+    await page.tap('.ioss-yt-dl');
+    const list = await until(async () => { const c = await choices(page); return c.length && c; }, 6000, 'quality sheet');
+    assert(!list.some((x) => /480p/.test(x)), 'the ad\'s stream is not offered: ' + JSON.stringify(list));
+    await pickChoice(page, '720p video');
+    await until(async () => (await ui('.toast .msg')).some((t) => /Ready/.test(t.text)), 10000, 'ready');
+    assert(!hits.some((h) => h.includes('rr2---') && /itag=136/.test(h)), 'player links tried first, so the refused ones were not needed');
+    assert(hits.some((h) => h.includes('rr5---') && /itag=136&clen=\d+&dur=4\.000&range=0-/.test(h)), 'player link reused with new byte ranges');
+    await clickToastAction(page, 'Save');
+    const b64 = await until(() => page.evaluate(() => window.__bytes && window.__bytes[0]), 5000, 'shared');
+    const p = probeBytes(b64, 'yt403.mp4');
+    assert(JSON.stringify(p.streams) === JSON.stringify(['audio:aac', 'video:h264:720']) && !p.errors.trim(), 'joined file: ' + JSON.stringify(p));
+  });
+
+  await test('youtube 403: when every source is refused, the message says so and the report lists each try', {
+    routes: {
+      'https://m.youtube.com/youtubei/v1/player': playerHd,
+      'https://m.youtube.com/watch': MYT_2026,
+      'https://rr2---sn-test.googlevideo.com/': () => ({ status: 403, body: '' })
+    },
+    store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { quality: '720' } } } }) },
+    xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
+  }, async ({ page, ui, clip }) => {
+    await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+    await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+    await page.tap('.ioss-yt-dl');
+    const msg = await until(async () => (await ui('.toast .msg')).find((t) => /Couldn't save this video \(HTTP 403\)/.test(t.text)), 8000, 'failure toast');
+    assert(/Play the video for a few seconds/.test(msg.text), 'hint: ' + msg.text);
+    await clickToastAction(page, 'Options');
+    await until(async () => (await choices(page)).length > 0, 3000, 'options');
+    await pickChoice(page, 'Copy error details');
+    await until(() => clip.length > 0, 2000, 'copied');
+    assert(/720p via ANDROID_VR: HTTP 403 · rr\*\.googlevideo\.com\/videoplayback itag=136/.test(clip[0]), 'each try listed: ' + clip[0]);
+    assert(!/1\.2\.3\.4|TOKEN|sn-test/.test(clip[0]), 'no addresses or tokens in the report');
+  });
+
+  await test('youtube: the thumbnail can be saved as a picture', {
+    routes: {
+      'https://m.youtube.com/youtubei/v1/player': playerHd,
+      'https://m.youtube.com/watch': MYT_2026.replace('<body>', '<body>' + SHARE_STUB),
+      'https://rr2---sn-test.googlevideo.com/': gvHd,
+      'https://i.ytimg.com/vi/': (u) => (/maxresdefault/.test(u) ? { status: 404, headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(1097) }
+        : { status: 200, contentType: 'image/jpeg', headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(/sddefault/.test(u) ? 40000 : 20000, 9) })
+    },
+    xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
+  }, async ({ page, ui }) => {
+    await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+    await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+    await page.tap('.ioss-yt-dl');
+    await until(async () => (await choices(page)).length > 0, 6000, 'sheet');
+    await pickChoice(page, 'Thumbnail (JPG)');
+    await until(async () => (await ui('.toast .msg')).some((t) => /Ready.*\n.*Save Image/.test(t.text)), 6000, 'ready');
+    await clickToastAction(page, 'Save');
+    const shared = await until(() => page.evaluate(() => window.__shared), 3000, 'shared');
+    assert(shared[0].name === 'HD Test.jpg' && shared[0].type === 'image/jpeg' && shared[0].size === 40000, 'largest existing thumbnail: ' + JSON.stringify(shared));
   });
 
   await test('youtube music: saves the sound as an .m4a without asking', {
@@ -752,6 +846,117 @@ await test('instagram feed: a streamed post is saved through its embed page', {
   assert(shared[0].name === 'Cat video.mp4' && shared[0].size === 4400, 'file: ' + JSON.stringify(shared));
 });
 
+// ---- YouTube: app tweaks (fake player with YouTube's player API)
+const FAKE_PLAYER = (levels) => `<script>
+  window.__calls = [];
+  const p = document.getElementById('movie_player');
+  const v = p.querySelector('video');
+  let q = 'auto', r = 1, t = 0, paused = true, dur = 60;
+  p.getAvailableQualityLevels = () => ${JSON.stringify(levels)};
+  p.getPlaybackQuality = () => q;
+  p.setPlaybackQualityRange = (a) => { __calls.push('quality:' + a); q = a; };
+  p.setPlaybackQuality = (a) => { q = a; };
+  p.getPlaybackRate = () => r;
+  p.setPlaybackRate = (x) => { __calls.push('rate:' + x); v.playbackRate = x; };
+  p.unloadModule = (m) => __calls.push('unload:' + m);
+  Object.defineProperties(v, {
+    playbackRate: { get: () => r, set: (x) => { r = x; v.dispatchEvent(new Event('ratechange')); } },
+    paused: { get: () => paused }, duration: { get: () => dur },
+    currentTime: { get: () => t, set: (x) => { t = x; } }, currentSrc: { get: () => 'blob:' + location.href }
+  });
+  v.play = () => { paused = false; v.dispatchEvent(new Event('playing')); return Promise.resolve(); };
+  v.pause = () => { paused = true; v.dispatchEvent(new Event('pause')); };
+</script>`;
+const DESKTOP_WATCH = (levels = ['hd1080', 'hd720', 'large', 'medium', 'auto']) => html(`
+  <div id="movie_player" class="html5-video-player" style="width:375px;height:211px"><video class="html5-main-video"></video>
+    <div class="ytp-right-controls"><button class="ytp-autonav-toggle-button" aria-checked="true"></button></div>
+    <div class="ytp-ce-element">end card</div><div class="iv-branding">watermark</div></div>
+  <ytd-reel-shelf-renderer id="shorts">shorts</ytd-reel-shelf-renderer>
+  <ytd-popup-container></ytd-popup-container>` + FAKE_PLAYER(levels) + `<script>
+  document.querySelector('.ytp-autonav-toggle-button').addEventListener('click', (e) => { e.target.setAttribute('aria-checked', 'false'); __calls.push('autoplay-off'); });
+</script>`);
+const TWEAKS = (settings) => ({ 'ioss:state': JSON.stringify({ core: { welcomed: true, lastCheck: Date.now() }, modules: { 'yt-tweaks': { settings } } }) });
+
+await test('youtube tweaks (desktop): speed, quality, subtitles off, autoplay off, end cards hidden', {
+  routes: { 'https://www.youtube.com/watch': DESKTOP_WATCH() },
+  store: TWEAKS({ speed: '1.5', quality: 'hd720', captions: 'off', autoplay: 'off' })
+}, async ({ page }) => {
+  await page.goto(`https://www.youtube.com/watch?v=${VIDEO_ID}`);
+  await until(() => page.evaluate(() => __calls.includes('autoplay-off')), 3000, 'autoplay toggle switched off');
+  await page.evaluate(() => document.querySelector('video').play());
+  const calls = await until(async () => { const c = await page.evaluate(() => __calls); return c.includes('rate:1.5') && c.includes('quality:hd720') && c.includes('unload:captions') && c; }, 3000, 'player settings');
+  assert(calls.filter((c) => c === 'autoplay-off').length === 1, 'toggle flipped once: ' + calls);
+  const hidden = await page.evaluate(() => ['.ytp-ce-element', '.iv-branding'].map((x) => getComputedStyle(document.querySelector(x)).display));
+  assert(hidden.every((d) => d === 'none'), 'end cards and watermark hidden: ' + hidden);
+  assert(await page.evaluate(() => getComputedStyle(document.getElementById('shorts')).display !== 'none'), 'Shorts stay unless asked');
+});
+
+await test('youtube tweaks: nearest lower quality, remembered speed, ads left alone', {
+  routes: { 'https://www.youtube.com/watch': DESKTOP_WATCH(['hd1080', 'large', 'medium', 'auto']) },
+  store: TWEAKS({ quality: 'hd720', rememberSpeed: true })
+}, async ({ page, store }) => {
+  await page.goto(`https://www.youtube.com/watch?v=${VIDEO_ID}`);
+  await sleep(300);
+  await page.evaluate(() => document.querySelector('video').play());
+  await until(() => page.evaluate(() => __calls.includes('quality:large')), 3000, '480p when 720p is missing');
+  await sleep(1600);
+  // You pick 1.75× in the player.
+  await page.tap('#movie_player');
+  await page.evaluate(() => { document.querySelector('video').playbackRate = 1.75; });
+  await until(() => JSON.parse(store.get('ioss:state')).modules['yt-tweaks'].settings.speed === '1.75', 2000, 'speed remembered');
+  // An ad speeding the video up is not remembered.
+  await page.evaluate(() => { document.getElementById('movie_player').classList.add('ad-showing'); document.querySelector('video').playbackRate = 16; });
+  await sleep(400);
+  assert(JSON.parse(store.get('ioss:state')).modules['yt-tweaks'].settings.speed === '1.75', 'ad rate ignored');
+});
+
+await test('youtube tweaks: "Continue watching?" is answered only when you did not pause', {
+  routes: { 'https://www.youtube.com/watch': DESKTOP_WATCH() },
+  store: TWEAKS({})
+}, async ({ page }) => {
+  await page.goto(`https://www.youtube.com/watch?v=${VIDEO_ID}`);
+  await sleep(300);
+  const ask = () => page.evaluate(() => {
+    document.querySelector('ytd-popup-container').innerHTML = '<tp-yt-paper-dialog><yt-confirm-dialog-renderer><div>Video paused. Continue watching?</div><div id="confirm-button"><button>Yes</button></div></yt-confirm-dialog-renderer></tp-yt-paper-dialog>';
+    document.querySelector('#confirm-button button').onclick = () => { __calls.push('confirmed'); document.querySelector('ytd-popup-container').innerHTML = ''; };
+    document.querySelector('video').pause();
+  });
+  await page.evaluate(() => document.querySelector('video').play());
+  await sleep(1600);
+  await ask();
+  await until(() => page.evaluate(() => __calls.includes('confirmed') && !document.querySelector('video').paused), 2000, 'answered and playing again');
+  // Your own pause: left alone.
+  await page.tap('#movie_player');
+  await ask();
+  await sleep(800);
+  assert(await page.evaluate(() => __calls.filter((c) => c === 'confirmed').length === 1 && document.querySelector('video').paused), 'your pause stays');
+});
+
+await test('youtube tweaks (iPhone): start page, hidden Shorts, Shorts seek bar', {
+  routes: {
+    'https://m.youtube.com/feed/subscriptions': html(`<ytm-reel-shelf-renderer id="shelf">shorts</ytm-reel-shelf-renderer><ytm-video-with-context-renderer id="v"><a href="/watch?v=x">video</a></ytm-video-with-context-renderer>
+      <ytm-pivot-bar-renderer><ytm-pivot-bar-item-renderer id="tab-home"><div class="pivot-bar-item-tab pivot-w2w"></div></ytm-pivot-bar-item-renderer><ytm-pivot-bar-item-renderer id="tab-shorts"><div class="pivot-bar-item-tab pivot-shorts"></div></ytm-pivot-bar-item-renderer></ytm-pivot-bar-renderer>`),
+    'https://m.youtube.com/shorts/': html(`<div id="movie_player" class="html5-video-player" style="position:fixed;inset:0"><video style="width:100%;height:100%"></video></div>` + FAKE_PLAYER([])),
+    'https://m.youtube.com/': html('<p>home</p>')
+  },
+  store: TWEAKS({ startPage: 'subscriptions', hideShorts: true })
+}, async ({ page }) => {
+  await page.goto('https://m.youtube.com/');
+  await until(() => page.evaluate(() => location.pathname === '/feed/subscriptions'), 4000, 'opened at Subscriptions');
+  await until(() => page.evaluate(() => getComputedStyle(document.getElementById('shelf')).display === 'none'), 3000, 'Shorts shelf hidden');
+  const vis = await page.evaluate(() => ['v', 'tab-home', 'tab-shorts'].map((id) => getComputedStyle(document.getElementById(id)).display));
+  assert(vis[0] !== 'none' && vis[1] !== 'none' && vis[2] === 'none', 'only Shorts hidden: ' + vis);
+  // Shorts seek bar
+  await page.goto('https://m.youtube.com/shorts/abcdefghijk');
+  const box = await until(async () => { const b = await page.$('#ioss-shorts-bar'); return b && b.boundingBox(); }, 4000, 'seek bar');
+  assert(box.height >= 24 && Math.round(box.width) === 375, 'full-width bar with a large touch area: ' + JSON.stringify(box));
+  await page.evaluate(() => document.querySelector('video').play());
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height - 2);
+  assert(await page.evaluate(() => Math.round(document.querySelector('video').currentTime) === 30), 'tap at the middle jumps to the middle');
+  await page.evaluate(() => { document.querySelector('video').currentTime = 15; document.querySelector('video').dispatchEvent(new Event('timeupdate')); });
+  assert(/scaleX\(0\.25\)/.test(await page.evaluate(() => document.querySelector('#ioss-shorts-bar i').style.transform)), 'progress shown');
+});
+
 await test('youtube: Shorts keep the floating download button', {
   routes: { 'https://m.youtube.com/shorts': html('<video style="width:300px;height:500px"></video>') },
   store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { mode: 'service' } } } }) }
@@ -777,7 +982,7 @@ await test('settings sheet opens with #suite and saves toggles', {
   await page.goto('https://example.com/#suite');
   await until(async () => page.evaluate(() => !!document.querySelector('ioss-ui') && !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet')), 4000, 'sheet');
   const names = await page.evaluate(() => Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.mod .n')).map((n) => n.textContent));
-  assert(names.length === 15, 'all modules listed: ' + names.join(', '));
+  assert(names.length === 16, 'all modules listed: ' + names.join(', '));
   assert(await page.evaluate(() => location.hash === ''), 'hash removed');
   await page.evaluate(() => {
     const sw = document.querySelector('ioss-ui').shadowRoot.querySelector('input[aria-label="Enable Reddit: remove login wall"]');

@@ -1,5 +1,5 @@
 {
-  "suite": "1.7.0",
+  "suite": "1.8.0",
   "api": 1,
   "modules": {
     "google-consent": {
@@ -65,12 +65,19 @@
       "file": "yt-player.js",
       "sha256": "28aa2009e75bd8a23a17213076511f7e7b213132ee85bb940925fbe9a96f30e9"
     },
+    "yt-tweaks": {
+      "name": "YouTube: app tweaks",
+      "version": "1.0.0",
+      "api": 1,
+      "file": "yt-tweaks.js",
+      "sha256": "8443976247e0d0e9b2f23d1ca9e36b23c6a60b3c4fd43dbf2a19be1a9fb697ea"
+    },
     "downloader": {
       "name": "Video downloader",
-      "version": "2.0.0",
+      "version": "2.1.0",
       "api": 1,
       "file": "downloader.js",
-      "sha256": "772820e15653e88829276082d8d202075b890eba7b41673ae28ac7626cf6d754"
+      "sha256": "98a3997d669e16b7280abf27785dbac2b5d46db9d0ab065bac00ac6806b949d7"
     },
     "shortlinks": {
       "name": "Bypass All Shortlinks",

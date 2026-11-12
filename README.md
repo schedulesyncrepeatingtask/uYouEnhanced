@@ -15,6 +15,7 @@ module updates itself**.
 | SponsorBlock | Simple Sponsor Skipper 2026.03 | Skips sponsors, intros and other segments (with an **Undo** button) |
 | Return YouTube Dislike | Return YouTube Dislike 3.2.0-ios | Shows dislike counts on m.youtube.com, the desktop site and Shorts |
 | YouTube: PiP & player tweaks | YouTube PIP Button (iOS Safari) 1.3 | Picture-in-Picture button; optional "Shorts → normal player" and background play |
+| YouTube: app tweaks | new (feature ideas from YouTube Plus / YTLite) | Default and remembered speed, preferred quality, subtitles off, no "Continue watching?", autoplay off, Shorts seek bar, start page; hide end cards, Shorts, Premium promos, comments or related videos. iPhone and desktop site |
 | Video downloader | All-in-One Video Downloader 1.0.19 + ideas from All-in-One Video Downloader 2026 (classccai) | Saves videos straight to your camera roll, with a quality picker: YouTube up to 1080p (picture and sound joined on the phone), YouTube Music as sound, X, TikTok, Instagram, Facebook, Threads, Pinterest, Snapchat, TED and more. No downloader website |
 | Dark Mode | Dark Mode 护眼模式 1.5.8 | Dims, warms or inverts every site; skips sites that are already dark; can follow the iPhone's Dark Mode and switch by time of day |
 | Remove web limits | Remove web limits 网页限制解除 1.3 | Lets you select and copy text and use the long-press menu on sites that block it |
@@ -240,6 +241,22 @@ itself, which is the same trust you give any auto-updating userscript.
 - It also works on the desktop site.
 - It no longer scans the page on every DOM change.
 
+**YouTube: app tweaks** (new)
+
+The best-known features of tweaked YouTube apps such as YouTube Plus / YTLite, rebuilt for the website. Nothing
+was taken from those apps; they are Google's app plus a tweak and can't run in Safari. Works on m.youtube.com and
+the desktop site, and survives YouTube's in-page navigation.
+- **Playback speed:** a default speed, and optionally "remember the speed I last chose".
+- **Quality:** preferred quality (Highest, 1080p, 720p, 480p, 360p), with the nearest lower one when a video
+  doesn't have it. Uses YouTube's own player controls.
+- **Subtitles always off**, **autoplay off** (flips YouTube's own switch once).
+- **"Video paused. Continue watching?"** is answered for you, but only when you didn't pause the video yourself.
+- **Shorts seek bar** on the iPhone site: tap or drag to jump.
+- **Start page:** open YouTube at Subscriptions, You or History instead of Home.
+- **Hide:** end-screen cards and the channel watermark (on by default), Premium and app promotions (on by default),
+  Shorts in feeds and the tab bar, comments, related videos.
+- Ads are left alone: speed and quality aren't applied while an ad plays, and an ad's speed-up isn't remembered.
+
 **Video downloader**
 - Its buttons only appeared on mouse hover, which never happens on a phone, and it ignored m.youtube.com, so on
   an iPhone nothing showed.
@@ -272,6 +289,12 @@ itself, which is the same trust you give any auto-updating userscript.
     "Offer a downloader website when saving fails" to also get a **Website** button (and Spotify support,
     which only works through a website because songs are DRM-protected).
   - Large videos (over 600 MB, adjustable) ask first, because the whole file is held in memory.
+  - **When YouTube refuses a link (HTTP 403):** the links the page's own player is streaming are tried first
+    (YouTube has already accepted those), then each YouTube app client in turn, each through Safari and then
+    through your userscript manager. If the video hasn't played yet, the message says to play it for a few
+    seconds and try again, so the player's links exist. **Options → Copy error details** copies what each try
+    returned (no addresses, tokens or cookies), ready to paste into a bug report.
+  - **Thumbnail:** the quality sheet also offers the video's thumbnail as a picture.
   - The script these ideas came from also has two "cloud engines" (loader.to and snapwc). They aren't included:
     they use another service's API keys and pretend to be that service's website.
 

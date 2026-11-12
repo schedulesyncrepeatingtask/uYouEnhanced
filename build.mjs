@@ -18,7 +18,7 @@ const suite = JSON.parse(read('src/suite.json'));
 // Load order = run order on a page.
 const ORDER = [
   'google-consent', 'google-privacy', 'google-lite', 'reddit', 'instagram',
-  'yt-adblock', 'yt-sponsorblock', 'yt-dislike', 'yt-player',
+  'yt-adblock', 'yt-sponsorblock', 'yt-dislike', 'yt-player', 'yt-tweaks',
   'downloader', 'shortlinks', 'dark-mode', 'web-limits', 'clean-urls'
 ];
 

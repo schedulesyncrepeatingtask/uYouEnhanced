@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iOS Userscript Suite
 // @namespace    https://github.com/schedulesyncrepeatingtask/uYouEnhanced
-// @version      1.7.0
+// @version      1.8.0
 // @description  All-in-one Safari suite tuned for iPhone 13 mini: YouTube ad skipping, SponsorBlock, dislikes, Picture-in-Picture, video downloader, Google anti-tracking and cookie-banner rejection, Reddit login-wall removal and shortlink bypassing. Every module updates itself.
 // @author       iOS Userscript Suite contributors (see README for the original authors)
 // @license      AGPL-3.0-or-later
@@ -49,7 +49,7 @@
    * modules without waiting for a full userscript update.
    * ==================================================================== */
 
-  const SUITE = {"name":"iOS Userscript Suite","version":"1.7.0","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
+  const SUITE = {"name":"iOS Userscript Suite","version":"1.8.0","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
   const RAW = `https://raw.githubusercontent.com/${SUITE.repo}/${SUITE.branch}/dist/`;
   const STATE_KEY = 'ioss:state';
   const CODE_KEY = (id) => `ioss:code:${id}`;
@@ -5462,11 +5462,289 @@ function writeMobileDislikes() {
   }
 }));
 
-  /* ---- module: downloader v2.0.0 ---- */
+  /* ---- module: yt-tweaks v1.0.0 ---- */
+  register(({
+  id: 'yt-tweaks',
+  name: 'YouTube: app tweaks',
+  version: '1.0.0',
+  api: 1,
+  source: 'Feature ideas from YouTube Plus / YTLite (dayanch96), rebuilt for the website',
+  description: 'Features known from tweaked YouTube apps, for m.youtube.com and the desktop site: default and remembered playback speed, preferred quality, subtitles off, no "Video paused. Continue watching?", autoplay off, a seek bar on Shorts, a start page, and hiding end-screen cards, Shorts, Premium promotions, comments or related videos.',
+  runAt: 'start',
+  frames: false,
+  match: (u) => /^(m|www)\.youtube\.com$/.test(u.hostname),
+  defaults: {
+    speed: '1', rememberSpeed: false, quality: 'auto', captions: 'auto', autoplay: 'keep', keepWatching: true, shortsBar: true,
+    startPage: 'home', hideEndCards: true, hideShorts: false, hidePremium: true, hideComments: false, hideRelated: false
+  },
+  options: [
+    { key: 'speed', type: 'select', label: 'Default playback speed', choices: [['1', 'Normal'], ['1.25', '1.25×'], ['1.5', '1.5×'], ['1.75', '1.75×'], ['2', '2×']] },
+    { key: 'rememberSpeed', type: 'bool', label: 'Remember the speed I last chose', help: 'Changing the speed in the player becomes the new default' },
+    { key: 'quality', type: 'select', label: 'Preferred quality', choices: [['auto', 'Auto (YouTube decides)'], ['max', 'Highest available'], ['hd1080', '1080p'], ['hd720', '720p'], ['large', '480p (saves data)'], ['medium', '360p']],
+      help: 'Uses the nearest lower quality when a video has no exact match' },
+    { key: 'captions', type: 'select', label: 'Subtitles', choices: [['auto', 'As YouTube decides'], ['off', 'Always off']] },
+    { key: 'autoplay', type: 'select', label: 'Autoplay next video', choices: [['keep', 'As set in YouTube'], ['off', 'Off']] },
+    { key: 'keepWatching', type: 'bool', label: 'Skip "Video paused. Continue watching?"', help: 'Only when you did not pause it yourself' },
+    { key: 'shortsBar', type: 'bool', label: 'Seek bar on Shorts (iPhone site)', help: 'Tap or drag to jump' },
+    { key: 'startPage', type: 'select', label: 'Open YouTube at', choices: [['home', 'Home'], ['subscriptions', 'Subscriptions'], ['you', 'You / Library'], ['history', 'History']] },
+    { key: 'hideEndCards', type: 'bool', label: 'Hide end-screen cards and channel watermark' },
+    { key: 'hideShorts', type: 'bool', label: 'Hide Shorts in feeds, search and the tab bar' },
+    { key: 'hidePremium', type: 'bool', label: 'Hide Premium and app promotions' },
+    { key: 'hideComments', type: 'bool', label: 'Hide comments' },
+    { key: 'hideRelated', type: 'bool', label: 'Hide related videos under the player' }
+  ],
+
+  // Runs in the page world: the player's own API (quality, speed,
+  // subtitles) is only reachable there.
+  pageApply: function (o) {
+    const p = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+    if (!p || p.classList.contains('ad-showing')) return;
+    try {
+      if (o.quality !== 'auto' && typeof p.setPlaybackQualityRange === 'function') {
+        const order = ['highres', 'hd2880', 'hd2160', 'hd1440', 'hd1080', 'hd720', 'large', 'medium', 'small', 'tiny'];
+        const levels = ((p.getAvailableQualityLevels && p.getAvailableQualityLevels()) || []).filter((l) => l !== 'auto');
+        let q = o.quality === 'max' ? levels[0] : o.quality;
+        if (q && levels.length && levels.indexOf(q) === -1) {
+          const want = order.indexOf(q);
+          q = levels.find((l) => order.indexOf(l) >= want) || levels[levels.length - 1];
+        }
+        if (q && (!p.getPlaybackQuality || p.getPlaybackQuality() !== q)) {
+          p.setPlaybackQualityRange(q, q);
+          if (p.setPlaybackQuality) p.setPlaybackQuality(q);
+        }
+      }
+    } catch (_) { /* player API changed */ }
+    try {
+      if (o.speed && typeof p.setPlaybackRate === 'function' && p.getPlaybackRate() !== o.speed) p.setPlaybackRate(o.speed);
+    } catch (_) { /* ignore */ }
+    try {
+      if (o.captionsOff && p.unloadModule) { p.unloadModule('captions'); p.unloadModule('cc'); }
+    } catch (_) { /* ignore */ }
+  },
+
+  run(api, cfg) {
+    const self = this;
+    const mobile = location.hostname === 'm.youtube.com';
+
+    // ---- Start page: only when YouTube is opened, not when you tap Home later.
+    const START = { subscriptions: '/feed/subscriptions', you: '/feed/you', history: '/feed/history' };
+    if (START[cfg.startPage] && location.pathname === '/' && !location.search && !/^https?:\/\/(m|www)\.youtube\.com\//.test(document.referrer)) {
+      location.replace(START[cfg.startPage]);
+      return;
+    }
+
+    // ---- Hiding things: one stylesheet, nothing scanned in a loop.
+    const css = [];
+    if (cfg.hideEndCards) {
+      css.push('.ytp-ce-element, .ytp-cards-teaser, .ytp-cards-button, .ytp-cards-teaser-box, .iv-branding, .ytp-iv-video-content, .annotation { display: none !important; }');
+    }
+    if (cfg.hideShorts) {
+      css.push([
+        // desktop
+        'ytd-reel-shelf-renderer', 'ytd-rich-shelf-renderer[is-shorts]', 'ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts])',
+        'ytd-video-renderer:has(a[href^="/shorts/"])', 'ytd-grid-video-renderer:has(a[href^="/shorts/"])', 'ytd-rich-item-renderer:has(a[href^="/shorts/"])',
+        'ytd-guide-entry-renderer:has(a[title="Shorts"])', 'ytd-mini-guide-entry-renderer[aria-label="Shorts"]',
+        // m.youtube.com
+        'ytm-reel-shelf-renderer', 'ytm-shorts-lockup-view-model', 'ytm-shorts-lockup-view-model-v2',
+        'ytm-rich-section-renderer:has(ytm-shorts-lockup-view-model, ytm-shorts-lockup-view-model-v2, ytm-reel-shelf-renderer)',
+        'grid-shelf-view-model:has(ytm-shorts-lockup-view-model, ytm-shorts-lockup-view-model-v2)',
+        'ytm-video-with-context-renderer:has(a[href^="/shorts/"])', 'ytm-compact-video-renderer:has(a[href^="/shorts/"])',
+        'ytm-pivot-bar-item-renderer:has(.pivot-shorts)'
+      ].join(',\n') + ' { display: none !important; }');
+    }
+    if (cfg.hidePremium) {
+      css.push([
+        'ytd-banner-promo-renderer', 'ytd-statement-banner-renderer', 'ytd-primetime-promo-renderer', 'ytd-mealbar-promo-renderer',
+        'ytd-guide-entry-renderer:has(a[href="/premium"])', '#premium-upsell', 'tp-yt-paper-dialog:has(ytd-mealbar-promo-renderer)',
+        'ytm-statement-banner-renderer', 'ytm-mealbar-promo-renderer', 'ytm-upsell-dialog-renderer', 'ytm-promoted-sparkles-web-renderer'
+      ].join(',\n') + ' { display: none !important; }');
+    }
+    if (cfg.hideComments) {
+      css.push('ytd-comments#comments, ytm-comments-entry-point-header-renderer, ytm-comment-section-renderer, ytm-item-section-renderer[section-identifier="comments-entry-point"], ytm-item-section-renderer[section-identifier="comment-item-section"] { display: none !important; }');
+    }
+    if (cfg.hideRelated) {
+      css.push('#related, ytd-watch-next-secondary-results-renderer, ytm-item-section-renderer[section-identifier="related-items"], ytm-single-column-watch-next-results-renderer ytm-video-with-context-renderer { display: none !important; }');
+    }
+    if (css.length) api.addStyle(css.join('\n'), 'ioss-yt-tweaks-css');
+
+    // ---- The player
+    const playerEl = () => document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+    const adShowing = () => { const p = playerEl(); return !!(p && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting'))); };
+    const mainVideo = () => document.querySelector('#movie_player video, .html5-video-player video, video.html5-main-video');
+    const speed = () => Math.min(4, Math.max(0.25, Number(cfg.speed) || 1));
+    const needsApply = () => speed() !== 1 || cfg.quality !== 'auto' || cfg.captions === 'off';
+    let ourRate = 0; // the speed we set, and until when its "ratechange" is ours
+    let ourRateUntil = 0;
+    let lastInput = 0;
+    for (const ev of ['pointerdown', 'touchstart', 'keydown', 'mousedown']) window.addEventListener(ev, () => { lastInput = Date.now(); }, { capture: true, passive: true });
+
+    function apply() {
+      if (!needsApply() || adShowing()) return;
+      const o = { speed: speed(), quality: String(cfg.quality), captionsOff: cfg.captions === 'off' };
+      ourRate = o.speed;
+      ourRateUntil = Date.now() + 1500;
+      const ran = api.pageRun(self.pageApply, o);
+      // Without page access (strict CSP): the speed still works from here.
+      const v = mainVideo();
+      if (!ran && v && v.playbackRate !== o.speed) v.playbackRate = o.speed;
+    }
+
+    const bound = new WeakSet();
+    let appliedFor = '';
+    function bindVideo(v) {
+      if (!v || bound.has(v)) return;
+      bound.add(v);
+      v.addEventListener('playing', () => {
+        // Once per video (and again shortly after: YouTube may reset quality right after starting).
+        const key = location.href + '|' + (v.currentSrc || v.src || '');
+        if (key === appliedFor || adShowing()) return;
+        appliedFor = key;
+        apply();
+        setTimeout(apply, 800);
+      });
+      v.addEventListener('ratechange', () => {
+        const r = v.playbackRate;
+        if (!cfg.rememberSpeed || adShowing() || (r === ourRate && Date.now() < ourRateUntil)) return;
+        if (!(r >= 0.25 && r <= 4) || String(r) === String(cfg.speed)) return;
+        cfg.speed = String(r);
+        api.save();
+        api.log('speed remembered', r);
+      });
+      v.addEventListener('pause', () => {
+        if (!cfg.keepWatching || document.hidden || Date.now() - lastInput < 1500) return;
+        setTimeout(() => confirmKeepWatching(v), 350);
+      });
+      v.addEventListener('ended', () => { if (cfg.autoplay === 'off') setTimeout(cancelAutoplay, 200); });
+    }
+
+    // "Video paused. Continue watching?": YouTube pauses, then asks.
+    // Only answered when the pause did not come from you.
+    function confirmKeepWatching(v) {
+      const dialogs = document.querySelectorAll('yt-confirm-dialog-renderer, ytm-confirm-dialog-renderer, ytd-popup-container tp-yt-paper-dialog, ytm-dialog');
+      for (const d of dialogs) {
+        if (!d.offsetParent && !d.getClientRects().length) continue;
+        // One selector at a time: a list would return the outer wrapper first.
+        let btn = null;
+        for (const sel of ['#confirm-button button', '.confirm-button button', '.dialog-buttons button:last-child', '#confirm-button', '.confirm-button']) {
+          btn = d.querySelector(sel);
+          if (btn) break;
+        }
+        if (!btn) continue;
+        btn.click();
+        api.log('answered "continue watching?"');
+        if (v.paused) v.play().catch(() => {});
+        return true;
+      }
+      return false;
+    }
+
+    // Autoplay off: flip YouTube's own toggle once (YouTube remembers it),
+    // and cancel the "Up next" countdown if one still appears.
+    let autoplayDone = false;
+    function autoplayOff() {
+      if (cfg.autoplay !== 'off' || autoplayDone) return;
+      const t = document.querySelector('.ytp-autonav-toggle-button[aria-checked="true"], .ytm-autonav-toggle-button-container[aria-pressed="true"], button.ytm-autonav-toggle-button-container[aria-pressed="true"]');
+      if (!t) return;
+      autoplayDone = true;
+      t.click();
+      api.log('autoplay switched off');
+    }
+    function cancelAutoplay() {
+      const c = document.querySelector('.ytp-autonav-endscreen-upnext-cancel-button, .ytm-autonav-endscreen-cancel-button, .autonav-endscreen-cancel-button, button[aria-label="Cancel autoplay"]');
+      if (c) c.click();
+    }
+
+    // ---- Shorts seek bar (the iPhone site has none)
+    let bar = null;
+    let barVideo = null;
+    const onTime = () => {
+      if (!bar || !barVideo || !barVideo.duration) return;
+      bar.firstChild.style.transform = `scaleX(${Math.min(1, barVideo.currentTime / barVideo.duration)})`;
+    };
+    const mostVisibleVideo = () => {
+      let best = null;
+      let score = 0;
+      for (const v of document.querySelectorAll('video')) {
+        const r = v.getBoundingClientRect();
+        const s = Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0)) * Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0));
+        if (s > score) { score = s; best = v; }
+      }
+      return best;
+    };
+    function bindBar(v) {
+      if (barVideo === v) return;
+      if (barVideo) barVideo.removeEventListener('timeupdate', onTime);
+      barVideo = v;
+      if (v) v.addEventListener('timeupdate', onTime);
+      onTime();
+    }
+    function shortsBar() {
+      const on = cfg.shortsBar && mobile && location.pathname.startsWith('/shorts/');
+      if (!on) {
+        if (bar) { bar.remove(); bar = null; bindBar(null); }
+        return;
+      }
+      if (!bar) {
+        api.addStyle(`
+          #ioss-shorts-bar { position: fixed; left: 0; right: 0; bottom: calc(48px + env(safe-area-inset-bottom, 0px)); height: 28px; z-index: 2147483000;
+            display: flex; align-items: flex-end; touch-action: none; -webkit-tap-highlight-color: transparent; }
+          #ioss-shorts-bar::before { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.3); }
+          #ioss-shorts-bar i { position: relative; display: block; width: 100%; height: 3px; transform-origin: left; transform: scaleX(0);
+            background: var(--yt-spec-static-brand-red, #f03); }
+          #ioss-shorts-bar.drag::before, #ioss-shorts-bar.drag i { height: 6px; }
+        `, 'ioss-shorts-bar-css');
+        bar = api.el('div', { id: 'ioss-shorts-bar', role: 'slider', 'aria-label': 'Seek' }, [api.el('i')]);
+        const seek = (e) => {
+          const v = barVideo;
+          if (!v || !v.duration) return;
+          const r = bar.getBoundingClientRect();
+          v.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * v.duration;
+          onTime();
+        };
+        let dragging = false;
+        bar.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dragging = true;
+          bar.classList.add('drag');
+          try { bar.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+          seek(e);
+        });
+        bar.addEventListener('pointermove', (e) => { if (dragging) { e.stopPropagation(); seek(e); } });
+        const end = () => { dragging = false; bar.classList.remove('drag'); };
+        bar.addEventListener('pointerup', end);
+        bar.addEventListener('pointercancel', end);
+        // Keep YouTube's swipe-to-next from reacting to the bar.
+        for (const ev of ['touchstart', 'touchmove', 'click']) bar.addEventListener(ev, (e) => e.stopPropagation(), { passive: ev !== 'click' });
+        document.body.appendChild(bar);
+      }
+      bindBar(mostVisibleVideo());
+    }
+
+    // ---- One shared page observer (the core merges it with the other
+    // YouTube modules'), plus navigation events. No timers.
+    const sweep = () => {
+      const v = mainVideo();
+      if (v) bindVideo(v);
+      for (const x of document.querySelectorAll('video')) bindVideo(x);
+      autoplayOff();
+      shortsBar();
+    };
+    // The video that starts playing is the one on screen (Shorts: after a swipe).
+    document.addEventListener('playing', (e) => { if (bar && e.target && e.target.tagName === 'VIDEO') bindBar(e.target); }, true);
+    api.onReady(() => {
+      sweep();
+      api.observe(document.body, { childList: true, subtree: true }, sweep, { throttle: 400 });
+      api.onUrlChange(() => { appliedFor = ''; autoplayDone = false; setTimeout(sweep, 300); });
+    });
+  }
+}));
+
+  /* ---- module: downloader v2.1.0 ---- */
   register(({
   id: 'downloader',
   name: 'Video downloader',
-  version: '2.0.0',
+  version: '2.1.0',
   api: 1,
   source: 'All-in-One Video Downloader 1.0.19 (Daniel) + ideas from All-in-One Video Downloader 2026.1108 (classccai, MIT)',
   description: 'Saves videos straight to your iPhone from YouTube (up to 1080p, picture and sound joined on the phone), YouTube Music (sound), X/Twitter, TikTok, Instagram, Facebook, Threads, Pinterest, Snapchat, TED, Douyin and Xiaohongshu. Tap the download button, pick a quality, then tap Save and "Save Video". No downloader website is opened.',
@@ -5475,7 +5753,7 @@ function writeMobileDislikes() {
   SITES: /(^|\.)(youtube\.com|tiktok\.com|instagram\.com|x\.com|twitter\.com|threads\.(com|net)|facebook\.com|pinterest\.[a-z.]+|snapchat\.com|ted\.com|douyin\.com|xiaohongshu\.com|spotify\.com)$/,
   CDN: /(googlevideo\.com|tiktokcdn(-eu|-us|-af)?\.com|douyinvod\.com|fbcdn\.net|twimg\.com|zjcdn\.com|snssdk\.com|tiktokv\.com|douyinstatic\.com|xhscdn\.com|amemv\.com|tikwm\.com|douyinpic\.com|douyinmusicpromotion\.com|cdninstagram\.com|licdn\.com|sc-cdn\.net|pinimg\.com|tedcdn\.com|dmcdn\.net|tumblr\.com|rutube\.ru|uma\.media)$/,
   match: function (u) { return this.SITES.test(u.hostname) || this.CDN.test(u.hostname); },
-  defaults: { mode: 'save', quality: 'ask', maxHeight: 1080, prefer60: false, warnMB: 600, fab: true, ytInline: true, inlineX: true, copyOnLongPress: true, siteFallback: false },
+  defaults: { mode: 'save', quality: 'ask', maxHeight: 1080, prefer60: false, thumbnail: true, warnMB: 600, fab: true, ytInline: true, inlineX: true, copyOnLongPress: true, siteFallback: false },
   options: [
     { key: 'mode', type: 'select', label: 'Download button', choices: [['save', 'Save on the iPhone (direct)'], ['service', 'Open a downloader website']] },
     { key: 'quality', type: 'select', label: 'Quality', choices: [['ask', 'Ask each time'], ['best', 'Best available'], ['1080', 'Up to 1080p'], ['720', 'Up to 720p'], ['360', '360p (quickest)'], ['audio', 'Sound only']],
@@ -5483,6 +5761,7 @@ function writeMobileDislikes() {
     { key: 'maxHeight', type: 'select', label: 'YouTube: highest quality offered', choices: [['1080', '1080p'], ['720', '720p'], ['480', '480p']],
       help: 'Higher YouTube qualities are VP9/AV1, which Photos cannot store' },
     { key: 'prefer60', type: 'bool', label: 'YouTube: prefer 60 fps', help: 'About twice the size' },
+    { key: 'thumbnail', type: 'bool', label: 'YouTube: offer the thumbnail too', help: 'Saved as a picture (Save Image)' },
     { key: 'warnMB', type: 'number', label: 'Ask before files larger than (MB)', min: 50, max: 4000, step: 50 },
     { key: 'fab', type: 'bool', label: 'Floating download button on video pages' },
     { key: 'ytInline', type: 'bool', label: 'YouTube: download button left of the like button', help: 'Replaces the floating button on watch pages' },
@@ -5788,7 +6067,7 @@ function writeMobileDislikes() {
     // ------------------------------------------------------------------
     const sanitize = (t) => (String(t || 'video').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'video');
     async function shareFile(blob, name) {
-      const type = /\.m4a$/.test(name) ? 'audio/mp4' : blob.type && blob.type !== 'application/octet-stream' ? blob.type : 'video/mp4';
+      const type = /\.m4a$/.test(name) ? 'audio/mp4' : /\.jpg$/.test(name) ? 'image/jpeg' : blob.type && blob.type !== 'application/octet-stream' ? blob.type : 'video/mp4';
       const file = new File([blob], name, { type });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         try { await navigator.share({ files: [file] }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
@@ -6106,10 +6385,20 @@ function writeMobileDislikes() {
     // ---- YouTube: ask YouTube's app API for the files. App clients get
     // plain links (the website's own links are scrambled). Up to 360p
     // comes as one file; HD comes as picture + sound, joined here.
+    //
+    // YouTube's servers sometimes refuse (HTTP 403) links that were made
+    // for another app or network path. The links the page's own player is
+    // streaming right now are accepted by definition, so those are tried
+    // first, then every app client in turn.
     const YT_CLIENTS = [
+      { name: 'ANDROID_VR', id: 28, version: '1.65.10', extra: { deviceMake: 'Oculus', deviceModel: 'Quest 3', osName: 'Android', osVersion: '12L', androidSdkVersion: 32 } },
       { name: 'ANDROID_VR', id: 28, version: '1.62.27', extra: { deviceMake: 'Oculus', deviceModel: 'Quest 3', osName: 'Android', osVersion: '12L', androidSdkVersion: 32 } },
       { name: 'IOS', id: 5, version: '20.10.4', extra: { deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.2.22D82' } }
     ];
+    const ITAG_HEIGHT = { 160: 144, 133: 240, 134: 360, 135: 480, 136: 720, 137: 1080, 298: 720, 299: 1080 };
+    const ITAG_FPS = { 298: 60, 299: 60 };
+    const ITAG_MUXED = { 18: 360, 22: 720 };
+    const ITAG_AUDIO = { 139: 48, 140: 128, 141: 256 };
     const pageValue = (key) => {
       for (const sc of document.querySelectorAll('script:not([src])')) {
         const m = sc.textContent.match(new RegExp('"' + key + '":"([^"]+)"'));
@@ -6117,10 +6406,47 @@ function writeMobileDislikes() {
       }
       return '';
     };
-    async function youtubeOptions(videoId) {
+
+    // The page player's stream links (from the browser's list of loaded
+    // files). Only plain byte-range links are usable; "SABR"/UMP streams
+    // are a YouTube-specific protocol.
+    const playerLinks = new Map(); // itag -> { base, clen, dur, at }
+    let navAt = 0;
+    if (isYT) {
+      const take = (name, at) => {
+        if (at < navAt || !/\.googlevideo\.com\/videoplayback/.test(name)) return;
+        let u;
+        try { u = new URL(name); } catch (_) { return; }
+        const q = u.searchParams;
+        const itag = q.get('itag');
+        const clen = Number(q.get('clen'));
+        if (!itag || !clen || q.has('sabr') || q.get('ump') === '1') return;
+        for (const k of ['range', 'rn', 'rbuf']) q.delete(k);
+        playerLinks.set(itag, { base: u.href, clen, dur: Number(q.get('dur')) || 0, at });
+      };
+      try { if (performance.setResourceTimingBufferSize) performance.setResourceTimingBufferSize(1500); } catch (_) { /* optional */ }
+      try {
+        new PerformanceObserver((list) => { for (const e of list.getEntries()) take(e.name, e.startTime); }).observe({ type: 'resource', buffered: true });
+      } catch (_) {
+        // Older Safari: read the list when the button is tapped instead.
+        self.readLinks = () => { try { for (const e of performance.getEntriesByType('resource')) take(e.name, e.startTime); } catch (_) { /* none */ } };
+      }
+      api.onUrlChange(() => { navAt = performance.now(); playerLinks.clear(); });
+    }
+    function pagePlayerLinks(expected) {
+      if (self.readLinks) self.readLinks();
+      const all = Array.from(playerLinks, ([itag, l]) => Object.assign({ itag: Number(itag) }, l));
+      // Ads stream from the same servers: keep the links whose length
+      // matches the video (or the longest, when the length is unknown).
+      const longest = Math.max(0, ...all.map((l) => l.dur));
+      return all.filter((l) => (expected ? Math.abs(l.dur - expected) < 2 : l.dur === longest));
+    }
+
+    async function youtubeOptions(videoId, report) {
       const responses = [];
       const visitor = pageValue('VISITOR_DATA');
       for (const c of YT_CLIENTS) {
+        if (responses.some((r) => r.via === c.name)) continue; // one version per client is enough
         try {
           const r = await fetch('/youtubei/v1/player?prettyPrint=false', {
             method: 'POST',
@@ -6131,9 +6457,13 @@ function writeMobileDislikes() {
               videoId, contentCheckOk: true, racyCheckOk: true
             })
           });
-          if (r.ok) responses.push(await r.json());
-        } catch (e) { api.log('player request failed', c.name, e && e.message); }
-        if (responses.some((x) => x.streamingData && (x.streamingData.adaptiveFormats || []).some((f) => f.url))) break;
+          const j = r.ok ? await r.json() : null;
+          const sd = (j && j.streamingData) || {};
+          const links = (sd.formats || []).concat(sd.adaptiveFormats || []).filter((f) => f.url).length;
+          report.push(`${c.name} ${c.version}: HTTP ${r.status}, ${(j && j.playabilityStatus && j.playabilityStatus.status) || '?'}, ${links} links`);
+          if (links) responses.push({ via: c.name, resp: j });
+          else if (j && j.videoDetails) responses.push({ via: c.name, resp: { videoDetails: j.videoDetails } });
+        } catch (e) { report.push(`${c.name} ${c.version}: ${e && e.message}`); }
       }
       // Fresh page load: the website's own player data sometimes has plain links.
       for (const sc of document.querySelectorAll('script:not([src])')) {
@@ -6141,53 +6471,72 @@ function writeMobileDislikes() {
         if (i === -1) continue;
         try {
           const resp = JSON.parse(sc.textContent.slice(i + 26).replace(/;\s*(var |<\/script|$)[\s\S]*/, ''));
-          if (resp.videoDetails && resp.videoDetails.videoId === videoId) responses.push(resp);
+          if (resp.videoDetails && resp.videoDetails.videoId === videoId) responses.push({ via: 'page', resp });
         } catch (_) { /* not parseable */ }
       }
-      const title = (responses.find((r) => r.videoDetails && r.videoDetails.title) || { videoDetails: {} }).videoDetails.title;
-      if (title) titleHint = title;
-      const muxed = [];
-      const videos = [];
-      const audios = [];
-      for (const resp of responses) {
+      const details = (responses.find((r) => r.resp.videoDetails && r.resp.videoDetails.title) || { resp: { videoDetails: {} } }).resp.videoDetails;
+      if (details.title) titleHint = details.title;
+      const expected = Number(details.lengthSeconds) || 0;
+
+      // Every source, grouped by what it is: picture at a height, sound, or both.
+      const size = (f) => Number(f.contentLength) || 0;
+      const pics = []; // { via, url, size, height, fps, bitrate }
+      const sounds = []; // { via, url, size, bitrate }
+      const muxed = []; // { via, url, size, height }
+      const player = pagePlayerLinks(expected);
+      for (const l of player) {
+        if (ITAG_HEIGHT[l.itag]) pics.push({ via: 'player', url: l.base, size: l.clen, height: ITAG_HEIGHT[l.itag], fps: ITAG_FPS[l.itag] || 30, bitrate: 0, itag: l.itag });
+        else if (ITAG_AUDIO[l.itag]) sounds.push({ via: 'player', url: l.base, size: l.clen, bitrate: ITAG_AUDIO[l.itag] * 1000 });
+        else if (ITAG_MUXED[l.itag]) muxed.push({ via: 'player', url: l.base, size: l.clen, height: ITAG_MUXED[l.itag] });
+      }
+      report.push(`player: ${player.length ? player.map((l) => l.itag).join(', ') : 'no stream links yet'}`);
+      for (const { via, resp } of responses) {
         const sd = resp.streamingData || {};
-        for (const f of sd.formats || []) if (f.url && /^video\/mp4/.test(f.mimeType || '')) muxed.push(f);
+        for (const f of sd.formats || []) if (f.url && /^video\/mp4/.test(f.mimeType || '')) muxed.push({ via, url: f.url, size: size(f), height: f.height || 360 });
         for (const f of sd.adaptiveFormats || []) {
           if (!f.url) continue;
           // H.264 only: the iPhone's Photos app cannot store VP9/AV1.
-          if (/^video\/mp4/.test(f.mimeType || '') && /avc1/.test(f.mimeType)) videos.push(f);
-          else if (/^audio\/mp4/.test(f.mimeType || '') && /mp4a/.test(f.mimeType) && (!f.audioTrack || f.audioTrack.audioIsDefault !== false)) audios.push(f);
+          if (/^video\/mp4/.test(f.mimeType || '') && /avc1/.test(f.mimeType)) pics.push({ via, url: f.url, size: size(f), height: f.height, fps: f.fps || 30, bitrate: f.bitrate || 0, itag: f.itag });
+          else if (/^audio\/mp4/.test(f.mimeType || '') && /mp4a/.test(f.mimeType) && (!f.audioTrack || f.audioTrack.audioIsDefault !== false)) sounds.push({ via, url: f.url, size: size(f), bitrate: f.bitrate || 0 });
         }
       }
-      const size = (f) => Number(f.contentLength) || 0;
-      const opts = [];
-      const audio = audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0] || null;
+      // Player first (known to work), then the clients in the order asked.
+      const rank = (via) => (via === 'player' ? 0 : via === 'page' ? 9 : 1 + YT_CLIENTS.findIndex((c) => c.name === via));
+      const bySource = (a, b) => rank(a.via) - rank(b.via) || (b.bitrate || 0) - (a.bitrate || 0);
+      sounds.sort(bySource);
+      const soundFor = (via) => sounds.find((s) => s.via === via) || sounds[0];
+
       const maxH = Number(cfg.maxHeight) || 1080;
-      if (audio) {
-        const byHeight = new Map();
-        for (const f of videos) {
-          if (!f.height || f.height > maxH) continue;
-          const cur = byHeight.get(f.height);
-          // Same height: prefer 30 fps over 60 (half the size) unless asked.
-          const better = !cur || (cfg.prefer60 ? (f.fps || 0) > (cur.fps || 0) : (f.fps || 0) < (cur.fps || 0)) || ((f.fps || 0) === (cur.fps || 0) && (f.bitrate || 0) > (cur.bitrate || 0));
-          if (better) byHeight.set(f.height, f);
-        }
-        for (const [h, f] of byHeight) {
+      const opts = [];
+      if (sounds.length) {
+        const heights = Array.from(new Set(pics.map((p) => p.height))).filter((h) => h && h <= maxH).sort((a, b) => b - a);
+        for (const h of heights) {
           if (h <= 360 && muxed.some((m) => m.height >= h)) continue; // the one-file version is quicker
-          opts.push({ height: h, fps: f.fps, video: f.url, audio: audio.url, size: size(f) + size(audio), vsize: size(f), asize: size(audio) });
+          // Same height: prefer 30 fps over 60 (half the size) unless asked.
+          const fpsOk = (p) => (cfg.prefer60 ? p.fps >= 50 : p.fps <= 30);
+          const at = pics.filter((p) => p.height === h);
+          const chosen = (at.some(fpsOk) ? at.filter(fpsOk) : at).sort(bySource);
+          const sources = chosen.map((p) => ({ via: p.via, video: p, audio: soundFor(p.via) }));
+          const fps = chosen[0].fps;
+          opts.push({ height: h, fps, sources, size: chosen[0].size + soundFor(chosen[0].via).size });
         }
       }
-      for (const f of muxed.sort((a, b) => (b.height || 0) - (a.height || 0))) {
-        if (!opts.some((o) => o.height === f.height)) opts.push({ height: f.height || 360, url: f.url, size: size(f), single: true });
+      const heightsMuxed = Array.from(new Set(muxed.map((m) => m.height))).sort((a, b) => b - a);
+      for (const h of heightsMuxed) {
+        if (opts.some((o) => o.height === h)) continue;
+        const sources = muxed.filter((m) => m.height === h).sort(bySource).map((m) => ({ via: m.via, url: m.url, size: m.size }));
+        opts.push({ height: h, single: true, sources, size: sources[0].size });
       }
       opts.sort((a, b) => b.height - a.height);
       for (const o of opts) {
         o.label = `${o.height}p${o.fps > 30 ? o.fps : ''} video`;
         o.sub = [o.size ? `${(o.size / MB).toFixed(o.size < 10 * MB ? 1 : 0)} MB` : '', o.single ? 'one file' : ''].filter(Boolean).join(' · ');
       }
-      if (audio) {
-        opts.push({ audioOnly: true, url: audio.url, size: size(audio), label: 'Sound only (M4A)', sub: size(audio) ? `${(size(audio) / MB).toFixed(1)} MB` : '' });
+      if (sounds.length) {
+        opts.push({ audioOnly: true, sources: sounds.map((s) => ({ via: s.via, url: s.url, size: s.size })), size: sounds[0].size,
+          label: 'Sound only (M4A)', sub: sounds[0].size ? `${(sounds[0].size / MB).toFixed(1)} MB` : '' });
       }
+      if (cfg.thumbnail) opts.push({ thumb: videoId, label: 'Thumbnail (JPG)', sub: 'picture', sources: [{ via: 'i.ytimg.com' }] });
       return opts;
     }
 
@@ -6195,16 +6544,23 @@ function writeMobileDislikes() {
     // Downloading
     // ------------------------------------------------------------------
     // Page fetch first (googlevideo allows YouTube's origin; most CDNs allow
-    // any), then GM.xmlHttpRequest, which is not limited by CORS.
+    // any), then GM.xmlHttpRequest, which is not limited by CORS and takes
+    // a different path (some servers refuse one and accept the other).
     async function getBytes(url) {
+      let first = 0;
       try {
         const r = await fetch(url, { credentials: 'omit' });
         if (r.ok) return await r.blob();
-        if (r.status === 403 || r.status === 404 || r.status === 410) throw Object.assign(new Error('HTTP ' + r.status), { fatal: true });
-      } catch (e) { if (e && e.fatal) throw e; }
-      const r = await api.request({ url, responseType: 'blob', timeout: 180000 });
-      if (r.status < 200 || r.status >= 300 || !r.response) throw new Error('HTTP ' + r.status);
-      return r.response instanceof Blob ? r.response : new Blob([r.response]);
+        first = r.status;
+      } catch (_) { /* CORS or network: try the manager */ }
+      let r;
+      try { r = await api.request({ url, responseType: 'blob', timeout: 180000 }); } catch (e) {
+        if (first) throw Object.assign(new Error('HTTP ' + first), { fatal: first === 403 || first === 404 || first === 410 });
+        throw e;
+      }
+      if (r.status >= 200 && r.status < 300 && r.response) return r.response instanceof Blob ? r.response : new Blob([r.response]);
+      const status = first || r.status;
+      throw Object.assign(new Error('HTTP ' + status), { fatal: status === 403 || status === 404 || status === 410 });
     }
     // googlevideo serves whole files slowly; 5 MB ranges, 3 at a time.
     async function downloadRanged(url, size, onProgress) {
@@ -6214,15 +6570,17 @@ function writeMobileDislikes() {
       for (let start = 0; start < size; start += CHUNK) ranges.push([start, Math.min(size, start + CHUNK) - 1]);
       let next = 0;
       let done = 0;
+      let failed = false;
       const worker = async () => {
-        while (next < ranges.length) {
+        while (next < ranges.length && !failed) {
           const i = next++;
           const [a, b] = ranges[i];
           const sep = url.includes('?') ? '&' : '?';
           let blob = null;
-          for (let attempt = 0; attempt < 3 && !blob; attempt++) {
-            try { blob = await getBytes(`${url}${sep}range=${a}-${b}`); } catch (e) { if (e.fatal || attempt === 2) throw e; }
+          for (let attempt = 0; attempt < 3 && !blob && !failed; attempt++) {
+            try { blob = await getBytes(`${url}${sep}range=${a}-${b}`); } catch (e) { if (e.fatal || attempt === 2) { failed = true; throw e; } }
           }
+          if (!blob) return;
           parts[i] = blob;
           done += blob.size;
           onProgress(done);
@@ -6252,6 +6610,24 @@ function writeMobileDislikes() {
     }
 
     let saving = null; // the download that is running or ready
+    let lastReport = [];
+    // What went wrong, for a bug report. No addresses, tokens or cookies:
+    // links are reduced to their host and a few harmless parameters.
+    const redact = (u) => {
+      try {
+        const x = new URL(u);
+        const keep = ['itag', 'c', 'mime', 'clen'].filter((k) => x.searchParams.has(k)).map((k) => `${k}=${x.searchParams.get(k)}`);
+        return `${x.hostname.replace(/^rr\d+---sn-[a-z0-9-]+\./, 'rr*.')}${x.pathname}${keep.length ? ' ' + keep.join(' ') : ''}${x.searchParams.has('pot') ? ' +pot' : ''}`;
+      } catch (_) { return '?'; }
+    };
+    function copyReport(report) {
+      const gm = (typeof GM === 'object' && GM && GM.info) || {};
+      const ios = (navigator.userAgent.match(/OS (\d+[._]\d+)/) || [])[1];
+      const text = [`Video downloader ${api.version} (suite ${api.suiteVersion}) on ${host}`,
+        `iOS ${ios ? ios.replace('_', '.') : '?'} · ${gm.scriptHandler || 'unknown manager'} ${gm.version || ''}`, ...report].join('\n');
+      api.copy(text).then((ok) => api.toast(ok ? 'Details copied. Paste them into a message or issue.' : text, { timeout: 5000 }));
+    }
+
     async function save(ctx = {}) {
       const key = ctx.key || location.href;
       if (saving && saving.key === key) {
@@ -6261,31 +6637,46 @@ function writeMobileDislikes() {
       const job = { key, blob: null, name: '' };
       saving = job;
       titleHint = '';
+      const report = [];
+      lastReport = report;
       const progress = api.toast('Looking for the video…', { timeout: 0 });
       const setText = (t) => progress && progress.update && progress.update(t);
-      const fail = (why) => {
+      const fail = (why, hint) => {
         if (saving === job) saving = null;
         progress && progress.close();
-        const extra = cfg.siteFallback ? { action: 'Website', onAction: openWebsite } : { action: 'Retry', onAction: () => save(ctx) };
-        api.toast(`Couldn't save this video${why ? ` (${why})` : ''}.`, Object.assign({ timeout: 9000 }, extra));
+        report.push('result: ' + (why || 'failed'));
+        const more = async () => {
+          if (!api.choose) return save(ctx);
+          const what = await api.choose({ title: 'Download failed', note: why || '', items: [
+            { label: 'Try again', value: 'retry' },
+            { label: 'Copy error details', sub: 'for a bug report', value: 'copy' },
+            cfg.siteFallback ? { label: 'Open downloader website', sub: 'tool77.com', value: 'site' } : null
+          ].filter(Boolean) });
+          if (what === 'retry') save(ctx);
+          else if (what === 'copy') copyReport(report);
+          else if (what === 'site') openWebsite();
+        };
+        api.toast(`Couldn't save this video${why ? ` (${why})` : ''}.${hint ? '\n' + hint : ''}`, { timeout: 12000, action: 'Options', onAction: more });
       };
       try {
         const id = isYT ? ytId() : null;
-        const opts = id ? await youtubeOptions(id) : await siteOptions(ctx);
+        const opts = id ? await youtubeOptions(id, report) : await siteOptions(ctx);
+        for (const o of opts) if (!o.sources) o.sources = [{ via: host, url: o.url, size: 0 }];
         if (saving !== job) return;
-        if (!opts.length) {
+        if (!opts.length || opts.every((o) => o.thumb)) {
           const v = ctx.video || onScreenVideo();
-          return fail(id ? 'YouTube did not offer a downloadable file' : v && /^blob:/.test(v.currentSrc || v.src || '') ? 'this site streams video in pieces' : 'no video file found');
+          return fail(id ? 'YouTube did not offer a downloadable file' : v && /^blob:/.test(v.currentSrc || v.src || '') ? 'this site streams video in pieces' : 'no video file found',
+            id ? 'Play the video for a few seconds, then tap download again.' : '');
         }
         // Pick: ask when there is a real choice, unless a quality is set.
         let pick = null;
-        const videos = opts.filter((o) => !o.audioOnly);
+        const videos = opts.filter((o) => !o.audioOnly && !o.thumb);
         const pref = isYTMusic && cfg.quality === 'ask' ? 'audio' : cfg.quality;
         if (pref === 'audio') pick = opts.find((o) => o.audioOnly) || null;
         else if (pref !== 'ask' && pref !== 'best') pick = videos.find((o) => !o.height || o.height <= Number(pref)) || videos[videos.length - 1];
-        else if (pref === 'best' || opts.length === 1 || !api.choose) pick = videos[0] || opts[0];
+        else if (pref === 'best' || opts.filter((o) => !o.thumb).length === 1 || !api.choose) pick = videos[0] || opts[0];
         if (!pick) {
-          progress && progress.update && progress.update('Choose a quality…');
+          setText('Choose a quality…');
           pick = await api.choose({ title: 'Save video', note: titleFor(), items: opts.map((o) => ({ label: o.label || 'Video', sub: o.sub || '', value: o })) });
           if (!pick) { if (saving === job) saving = null; progress && progress.close(); return; }
         }
@@ -6296,34 +6687,60 @@ function writeMobileDislikes() {
           return;
         }
         const pct = (n) => (total ? ` ${Math.min(99, Math.floor((n / total) * 100))}%` : '');
-        const label = pick.height ? `${pick.height}p` : pick.audioOnly ? 'sound' : '';
+        const label = pick.thumb ? 'thumbnail' : pick.height ? `${pick.height}p` : pick.audioOnly ? 'sound' : '';
         const fetchOne = (url, size, offset) => (size ? downloadRanged(url, size, (n) => setText(`Downloading ${label}…${pct(offset + n)}`)) : getBytes(url));
-        let blob;
-        let ext = 'mp4';
-        setText(`Downloading ${label}…${pct(0)}`);
-        if (pick.video) {
-          const vBlob = await fetchOne(pick.video, pick.vsize, 0);
-          const aBlob = await fetchOne(pick.audio, pick.asize, pick.vsize || vBlob.size);
-          if (saving !== job) return;
-          setText('Joining picture and sound…');
-          const joined = self.mp4.join([new Uint8Array(await vBlob.arrayBuffer()), new Uint8Array(await aBlob.arrayBuffer())]);
-          blob = new Blob(joined.parts, { type: 'video/mp4' });
-        } else if (pick.audioOnly) {
-          const aBlob = await fetchOne(pick.url, pick.size, 0);
+        let ext = pick.thumb ? 'jpg' : pick.audioOnly ? 'm4a' : 'mp4';
+        // One source after the other until one works.
+        const fromSource = async (src) => {
+          if (pick.thumb) {
+            for (const q of ['maxresdefault', 'sddefault', 'hqdefault']) {
+              const b = await getBytes(`https://i.ytimg.com/vi/${pick.thumb}/${q}.jpg`).catch(() => null);
+              if (b && b.size > 5000) return new Blob([b], { type: 'image/jpeg' }); // 120x90 grey = missing
+            }
+            throw new Error('no thumbnail');
+          }
+          if (src.video) {
+            const vBlob = await fetchOne(src.video.url, src.video.size, 0);
+            const aBlob = await fetchOne(src.audio.url, src.audio.size, src.video.size || vBlob.size);
+            if (saving !== job) return null;
+            setText('Joining picture and sound…');
+            const joined = self.mp4.join([new Uint8Array(await vBlob.arrayBuffer()), new Uint8Array(await aBlob.arrayBuffer())]);
+            return new Blob(joined.parts, { type: 'video/mp4' });
+          }
+          const b = await fetchOne(src.url, isYT ? src.size : 0, 0);
           // YouTube's sound files are streaming fragments; re-pack them as an
           // ordinary .m4a so Files, Music apps and editors open it.
-          try { blob = new Blob(self.mp4.join([new Uint8Array(await aBlob.arrayBuffer())]).parts, { type: 'audio/mp4' }); } catch (_) { blob = aBlob; }
-          ext = 'm4a';
-        } else {
-          blob = await fetchOne(pick.url, isYT ? pick.size : 0, 0);
+          if (pick.audioOnly) { try { return new Blob(self.mp4.join([new Uint8Array(await b.arrayBuffer())]).parts, { type: 'audio/mp4' }); } catch (_) { return b; } }
+          return b;
+        };
+        let blob = null;
+        let lastError = null;
+        for (const src of pick.sources) {
+          if (saving !== job) return;
+          setText(`Downloading ${label}…${pct(0)}`);
+          try {
+            blob = await fromSource(src);
+            report.push(`${label} via ${src.via}: ok`);
+            break;
+          } catch (e) {
+            lastError = e;
+            const link = src.video ? src.video.url : src.url;
+            report.push(`${label} via ${src.via}: ${e && e.message}${link ? ' · ' + redact(link) : ''}`);
+          }
         }
         if (saving !== job) return; // navigated away or restarted
-        if (!blob || blob.size < 1000) return fail('the file was empty');
+        if (!blob) {
+          const refused = lastError && /HTTP 403/.test(lastError.message);
+          const triedPlayer = pick.sources.some((s) => s.via === 'player');
+          return fail(lastError ? lastError.message : '', refused && isYT && !triedPlayer ? 'Play the video for a few seconds, then tap download again.' : '');
+        }
+        if (blob.size < 1000) return fail('the file was empty');
         job.blob = blob;
         job.name = sanitize(titleFor()) + '.' + ext;
         progress && progress.close();
         // A fresh tap is required before iOS shows the share sheet.
-        api.toast(`Ready: ${(blob.size / MB).toFixed(1)} MB.\nTap Save, then "${ext === 'm4a' ? 'Save to Files' : 'Save Video'}".`, {
+        const where = ext === 'm4a' ? 'Save to Files' : ext === 'jpg' ? 'Save Image' : 'Save Video';
+        api.toast(`Ready: ${(blob.size / MB).toFixed(1)} MB.\nTap Save, then "${where}".`, {
           timeout: 120000, action: 'Save', onAction: () => shareFile(job.blob, job.name)
         });
       } catch (e) {
