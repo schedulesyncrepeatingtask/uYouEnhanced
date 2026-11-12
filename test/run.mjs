@@ -4,6 +4,7 @@
 // with an in-memory GM API, and checks the behaviour of one module.
 //
 // Usage: node test/run.mjs [filter]
+//        SHOTS_DIR=/some/dir node test/run.mjs shots   (screenshots of the look)
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -48,16 +49,17 @@ const filter = process.argv[2];
 
 async function withPage(t, fn) {
   const browser = await chromium.launch();
-  const context = await browser.newContext({ ...devices['iPhone 13 Mini'] });
+  const context = await browser.newContext({ ...devices['iPhone 13 Mini'], colorScheme: t.dark ? 'dark' : 'light' });
   const store = new Map(Object.entries(t.store || {}));
   const opened = [];
   const clip = [];
   const xhrLog = [];
+  const gets = [];
   const errors = [];
   const routes = t.routes || {};
   const xhr = t.xhr || {};
   await context.exposeBinding('__gm', (_src, op, ...a) => {
-    if (op === 'get') return store.has(a[0]) ? JSON.parse(store.get(a[0])) : undefined;
+    if (op === 'get') { gets.push(a[0]); return store.has(a[0]) ? JSON.parse(store.get(a[0])) : undefined; }
     if (op === 'set') { store.set(a[0], JSON.stringify(a[1])); return undefined; }
     if (op === 'del') { store.delete(a[0]); return undefined; }
     if (op === 'open') { opened.push(a[0]); return undefined; }
@@ -71,7 +73,7 @@ async function withPage(t, fn) {
     }
     return undefined;
   });
-  await context.addInitScript({ content: GM_SHIM + '\n' + BUNDLE });
+  await context.addInitScript({ content: (t.before || '') + '\n' + GM_SHIM + '\n' + BUNDLE });
   const hits = [];
   await context.route('**/*', (route) => {
     const url = route.request().url();
@@ -93,7 +95,7 @@ async function withPage(t, fn) {
     return host && host.shadowRoot ? Array.from(host.shadowRoot.querySelectorAll(s)).map((n) => ({ text: n.textContent, cls: n.className })) : [];
   }, sel);
   try {
-    await fn({ page, store, opened, clip, xhrLog, hits, errors, ui });
+    await fn({ page, store, opened, clip, xhrLog, gets, hits, errors, ui });
     if (errors.length) throw new Error('Page errors: ' + errors.join(' | '));
   } finally {
     await browser.close();
@@ -242,6 +244,7 @@ await test('reddit: removes login wall, unblurs, sets over18', {
 
 await test('youtube (m.): PiP button, ad hiding, ad skip, dislikes, SponsorBlock, download button', {
   routes: { 'https://m.youtube.com/watch': MYT_WATCH },
+  store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { mode: 'service' } } } }) },
   xhr: {
     'https://returnyoutubedislikeapi.com/votes': { status: 200, text: JSON.stringify({ id: VIDEO_ID, likes: 1000, dislikes: 1234 }) },
     'https://returnyoutubedislikeapi.com/puzzle': { status: 500, text: '' },
@@ -280,11 +283,279 @@ await test('youtube (m.): PiP button, ad hiding, ad skip, dislikes, SponsorBlock
   assert(await page.evaluate(() => document.querySelector('video').muted), 'ad muted');
   await page.evaluate(() => document.getElementById('movie_player').classList.remove('ad-showing'));
   await until(() => page.evaluate(() => !document.querySelector('video').muted && document.querySelector('video').playbackRate === 1), 3000, 'mute/rate restored');
-  // Download button
-  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'download button');
-  await page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.fab.show').click());
+  // Download button: in the action bar, directly left of the like button
+  const order = await until(() => page.evaluate(() => {
+    const row = document.querySelector('.slim-video-action-bar-actions');
+    const dl = row.querySelector(':scope > .ioss-yt-dl');
+    return dl && Array.from(row.children).map((c) => c.className || c.tagName.toLowerCase());
+  }), 4000, 'inline download button');
+  assert(order[0] === 'ioss-yt-dl' && order[1] === 'segmented-buttons', 'left of like: ' + JSON.stringify(order));
+  const dlBox = await (await page.$('.ioss-yt-dl')).boundingBox();
+  assert(dlBox.width >= 44 && dlBox.height >= 36, 'tap target: ' + JSON.stringify(dlBox));
+  await sleep(2200);
+  assert((await ui('.fab.show')).length === 0, 'floating button hidden on watch pages');
+  await page.tap('.ioss-yt-dl');
   await until(() => opened.length > 0, 2000, 'download opened');
   assert(opened[0].startsWith('https://www.tool77.com/') && opened[0].includes(encodeURIComponent(`https://www.youtube.com/watch?v=${VIDEO_ID}`)), 'download url: ' + opened[0]);
+  // Dislikes still land on the dislike button, not on ours.
+  assert(/1\.2K/.test(await page.evaluate(() => document.querySelector('dislike-button-view-model span[role=text]').textContent)), 'dislikes intact');
+});
+
+await test('youtube: download button + dislikes when like/dislike sit directly in the row', {
+  routes: { 'https://m.youtube.com/watch': html(`
+    <div id="player"><div id="movie_player" class="html5-video-player"><video class="html5-main-video"></video></div></div>
+    <div class="slim-video-action-bar-actions">
+      <like-button-view-model><button aria-pressed="false"><span role="text">1K</span></button></like-button-view-model>
+      <dislike-button-view-model><button aria-pressed="false"><span role="text"></span></button></dislike-button-view-model>
+      <ytm-button-renderer id="share"><button>Share</button></ytm-button-renderer>
+    </div>`) },
+  xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: JSON.stringify({ likes: 10, dislikes: 2345 }) } }
+}, async ({ page }) => {
+  await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+  const order = await until(() => page.evaluate(() => {
+    const row = document.querySelector('.slim-video-action-bar-actions');
+    return row.querySelector(':scope > .ioss-yt-dl') && Array.from(row.children).map((c) => c.className || c.tagName.toLowerCase());
+  }), 4000, 'inline button');
+  assert(order.join() === 'ioss-yt-dl,like-button-view-model,dislike-button-view-model,ytm-button-renderer', 'order: ' + order);
+  await until(() => page.evaluate(() => /2\.3K/.test(document.querySelector('dislike-button-view-model span[role=text]').textContent)), 6000, 'dislike count on the dislike button');
+  assert(!(await page.evaluate(() => document.querySelector('.ioss-yt-dl').textContent.match(/\d/))), 'nothing written into the download button');
+});
+
+// YouTube's 2026 mobile watch page (from a user screenshot): dark theme, one
+// row holding the channel avatar, the Subscribe pill and icon-only actions.
+const MYT_2026 = html(`
+  <style>
+    body { background: #0f0f0f; color: #f1f1f1; margin: 0; }
+    .slim-video-action-bar-actions { display: flex; align-items: center; gap: 8px; padding: 0 12px; }
+    /* Like YouTube: native buttons are styled by their own class, so a
+       foreign button in the row inherits nothing from these rules. */
+    .yt-btn { background: transparent; border: 0; color: rgb(241, 241, 241); width: 44px; height: 44px; }
+    #sub .yt-btn { background: #272727; width: auto; border-radius: 18px; padding: 0 14px; }
+  </style>
+  <div id="player"><div id="movie_player" class="html5-video-player" style="height:211px;background:#000"><video class="html5-main-video"></video></div></div>
+  <ytm-slim-video-action-bar-renderer><div class="slim-video-action-bar-actions">
+    <ytm-channel-thumbnail-with-link-renderer id="avatar"><a href="/@channel"><img alt=""></a></ytm-channel-thumbnail-with-link-renderer>
+    <ytm-subscribe-button-renderer id="sub"><button class="yt-btn"><span role="text">Abonnieren</span></button></ytm-subscribe-button-renderer>
+    <like-button-view-model><button class="yt-btn" aria-label="Mag ich"></button></like-button-view-model>
+    <dislike-button-view-model><button class="yt-btn" aria-label="Mag ich nicht"></button></dislike-button-view-model>
+    <ytm-button-renderer id="share"><button class="yt-btn" aria-label="Teilen"></button></ytm-button-renderer>
+  </div></ytm-slim-video-action-bar-renderer>`);
+
+await test('youtube 2026 layout: dislikes on the dislike button (not Subscribe), visible download button', {
+  routes: { 'https://m.youtube.com/watch': MYT_2026 },
+  store: { 'ioss:state': JSON.stringify({ core: { look: 'plain' }, modules: { downloader: { settings: { mode: 'service' } } } }) },
+  xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: JSON.stringify({ likes: 211, dislikes: 3 }) } }
+}, async ({ page, opened }) => {
+  await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+  await until(() => page.evaluate(() => /3/.test(document.querySelector('dislike-button-view-model').textContent)), 6000, 'dislike count on the dislike button');
+  await sleep(1200); // let the 500 ms mobile re-write loop run a few times
+  const r = await page.evaluate(() => {
+    const dl = document.querySelector('.ioss-yt-dl');
+    const like = document.querySelector('like-button-view-model button');
+    return {
+      sub: document.querySelector('#sub').textContent.trim(),
+      order: Array.from(document.querySelector('.slim-video-action-bar-actions').children).map((c) => c.id || c.className || c.tagName.toLowerCase()),
+      dlColor: dl && getComputedStyle(dl).color,
+      likeColor: getComputedStyle(like).color,
+      dlBg: dl && getComputedStyle(dl).backgroundColor
+    };
+  });
+  assert(r.sub === 'Abonnieren', 'Subscribe label untouched: ' + r.sub);
+  assert(r.order.join() === 'avatar,sub,ioss-yt-dl ioss-yt-dl-icon,like-button-view-model,dislike-button-view-model,share', 'order: ' + r.order);
+  assert(r.dlColor === r.likeColor, `download icon uses the like button colour (${r.dlColor} vs ${r.likeColor})`);
+  assert(r.dlBg === 'rgba(0, 0, 0, 0)', 'icon-only like the other actions: ' + r.dlBg);
+  await page.tap('.ioss-yt-dl');
+  await until(() => opened.length > 0, 2000, 'download opened');
+});
+
+// ---- Save to Photos ---------------------------------------------------------
+// iOS share sheet stub: records what would be offered to "Save Video".
+const SHARE_STUB = `<script>
+  navigator.canShare = () => true;
+  navigator.share = async ({ files }) => { window.__shared = files.map((f) => ({ name: f.name, type: f.type, size: f.size })); };
+</script>`;
+const GV = 'https://rr1---sn-test.googlevideo.com/videoplayback?id=1&itag=18';
+const SIZE = 12 * 1000 * 1000;
+const playerOk = (title) => ({ status: 200, contentType: 'application/json', body: JSON.stringify({
+  playabilityStatus: { status: 'OK' },
+  videoDetails: { videoId: VIDEO_ID, title },
+  streamingData: { formats: [{ itag: 18, url: GV, mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"', height: 360, qualityLabel: '360p', contentLength: String(SIZE) }] }
+}) });
+const googlevideo = (url) => {
+  const m = url.match(/[?&]range=(\d+)-(\d+)/);
+  const len = m ? +m[2] - +m[1] + 1 : SIZE;
+  return { status: 200, contentType: 'video/mp4', headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(len, 7) };
+};
+const clickToastAction = (page, label) => page.evaluate((l) => {
+  const b = Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.toast button')).find((x) => x.textContent === l);
+  if (!b) return false;
+  b.click();
+  return true;
+}, label);
+
+await test('aero look: glossy buttons in pages and in the settings sheet; "Plain" switches it off', {
+  routes: { 'https://m.youtube.com/watch': MYT_2026 },
+  store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { mode: 'service' } } } }) },
+  xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: JSON.stringify({ likes: 211, dislikes: 3 }) } }
+}, async ({ page, opened, store }) => {
+  await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+  await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+  await sleep(500);
+  const dl = await page.evaluate(() => {
+    const b = document.querySelector('.ioss-yt-dl');
+    const st = getComputedStyle(b);
+    const r = b.getBoundingClientRect();
+    return { bg: st.backgroundImage, color: st.color, w: Math.round(r.width), h: Math.round(r.height), radius: st.borderRadius,
+      gloss: getComputedStyle(b, '::before').backgroundImage };
+  });
+  assert(/linear-gradient/.test(dl.bg) && dl.color === 'rgb(255, 255, 255)', 'glossy blue with a white icon: ' + JSON.stringify(dl));
+  assert(/linear-gradient/.test(dl.gloss), 'highlight on the top half');
+  assert(dl.w === dl.h && dl.w >= 36 && dl.w <= 44 && dl.radius === '50%', 'round orb in the icon-only layout: ' + JSON.stringify(dl));
+  await page.tap('.ioss-yt-dl');
+  await until(() => opened.length > 0, 2000, 'download still works');
+  // Settings sheet
+  const shadow = (fn, arg) => page.evaluate(([f, a]) => new Function('root', 'a', 'return (' + f + ')(root, a)')(document.querySelector('ioss-ui').shadowRoot, a), [fn.toString(), arg]);
+  await page.evaluate(() => { location.hash = '#suite'; });
+  await until(() => shadow((r) => !!r.querySelector('.sheet')), 4000, 'sheet');
+  const look = await shadow((r) => {
+    const cs = (sel, pseudo) => getComputedStyle(r.querySelector(sel), pseudo);
+    return {
+      aero: r.querySelector('.wrap').classList.contains('aero'),
+      primary: cs('.btn.primary').backgroundImage, sheet: cs('.sheet').backgroundImage, orb: cs('.orb').display,
+      swOn: cs('input.sw:checked').backgroundImage, dot: cs('.dot i').backgroundImage, card: cs('.card').backgroundImage,
+      moreH: Math.round(r.querySelector('.more').getBoundingClientRect().height), swH: Math.round(r.querySelector('input.sw').getBoundingClientRect().height)
+    };
+  });
+  assert(look.aero && /gradient/.test(look.primary) && /gradient/.test(look.sheet) && /gradient/.test(look.swOn) && /gradient/.test(look.dot) && /gradient/.test(look.card),
+    'glass sheet, glossy buttons, switches and dot: ' + JSON.stringify(look));
+  assert(look.orb === 'flex', 'logo orb in the title bar');
+  assert(look.moreH >= 44 && look.swH === 31, 'tap targets unchanged: ' + JSON.stringify(look));
+  // Switch to Plain: applies to the sheet at once and is saved.
+  await shadow((r) => { const sel = r.querySelector('#o-core-look'); sel.value = 'plain'; sel.dispatchEvent(new Event('change', { bubbles: true })); });
+  const plain = await shadow((r) => ({ aero: r.querySelector('.wrap').classList.contains('aero'),
+    primary: getComputedStyle(r.querySelector('.btn.primary')).backgroundImage, orb: getComputedStyle(r.querySelector('.orb')).display }));
+  assert(!plain.aero && plain.primary === 'none' && plain.orb === 'none', 'plain look: ' + JSON.stringify(plain));
+  await until(() => JSON.parse(store.get('ioss:state')).core.look === 'plain', 2000, 'look saved');
+});
+
+await test('speed: YouTube modules share one page observer; ad state is watched on the player only', {
+  routes: { 'https://m.youtube.com/watch': MYT_WATCH },
+  before: `(() => {
+    window.__obs = [];
+    const orig = MutationObserver.prototype.observe;
+    MutationObserver.prototype.observe = function (target, options) {
+      window.__obs.push({ target: target === document.body ? 'body' : target === document.documentElement ? 'html' : (target.id || target.tagName),
+        attrs: !!(options && options.attributes), subtree: !!(options && options.subtree), filter: (options && options.attributeFilter) || null });
+      return orig.call(this, target, options);
+    };
+  })();`,
+  xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: JSON.stringify({ likes: 1, dislikes: 2 }) } }
+}, async ({ page }) => {
+  await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+  await until(() => page.$('.ioss-pip-btn'), 4000, 'PiP button');
+  await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+  await sleep(400);
+  const obs = await page.evaluate(() => window.__obs);
+  const bodyPlain = obs.filter((o) => o.target === 'body' && o.subtree && !o.attrs);
+  assert(bodyPlain.length === 1, 'one shared <body> observer for PiP, ad skipping and the download button, got ' + bodyPlain.length);
+  // (Clean URLs watches href changes only, which is narrow and cheap.)
+  assert(!obs.some((o) => (o.target === 'body' || o.target === 'html') && o.subtree && o.attrs && (!o.filter || o.filter.includes('class') || o.filter.includes('style'))),
+    'nothing watches every class change on the page: ' + JSON.stringify(obs));
+  assert(obs.some((o) => o.target === 'movie_player' && o.attrs && !o.subtree), 'player class watched directly: ' + JSON.stringify(obs));
+  // The features still react: an ad is skipped via the player's class change.
+  await page.evaluate(() => { const v = document.querySelector('video'); v.duration = 30; window.__seeks = []; document.getElementById('movie_player').classList.add('ad-showing'); });
+  await until(() => page.evaluate(() => (window.__seeks || []).some((x) => x > 29)), 3000, 'ad fast-forwarded');
+});
+
+await test('speed: hot-updated modules are loaded only on pages where they run', {
+  routes: { 'https://example.com/': html('<p>hello</p>'), 'https://www.reddit.com/': html('<p>reddit</p>') },
+  store: {
+    'ioss:state': JSON.stringify({ core: { welcomed: true, lastCheck: Date.now() }, cache: { reddit: '9.0.0' } }),
+    'ioss:code:reddit': JSON.stringify(`({ id: 'reddit', name: 'Reddit (hot)', version: '9.0.0', api: 1, match: (u) => u.hostname === 'www.reddit.com', defaults: {}, options: [], run() { document.documentElement.setAttribute('data-hot', '9'); } })`)
+  }
+}, async ({ page, gets, ui }) => {
+  await page.goto('https://example.com/');
+  gets.length = 0; // ignore the blank start page
+  await page.reload();
+  await until(() => page.evaluate(() => !!document.querySelector('ioss-ui')), 4000, 'booted');
+  assert(!gets.includes('ioss:code:reddit'), 'update not read on an unrelated site: ' + gets);
+  assert(gets.filter((k) => k === 'ioss:state').length === 1, 'one settings read per page: ' + gets);
+  // The settings sheet still shows the installed update.
+  await page.evaluate(() => { location.hash = '#suite'; });
+  await until(async () => (await ui('.mod .n')).some((x) => x.text === 'Reddit (hot)'), 4000, 'sheet lists the hot-updated module');
+  assert((await ui('.mod .v')).some((x) => /v9\.0\.0 \(hot-updated\)/.test(x.text)), 'version shown');
+  // ...and it runs where it matches.
+  await page.goto('https://www.reddit.com/r/x/');
+  await until(() => page.evaluate(() => document.documentElement.getAttribute('data-hot') === '9'), 4000, 'hot module runs on its site');
+});
+
+await test('save to photos: YouTube video is downloaded in ranges and offered to "Save Video"', {
+  routes: {
+    'https://m.youtube.com/youtubei/v1/player': () => playerOk('Test: Video/Title'),
+    'https://m.youtube.com/watch': MYT_2026.replace('<body>', '<body>' + SHARE_STUB),
+    'https://rr1---sn-test.googlevideo.com/': googlevideo
+  },
+  xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
+}, async ({ page, hits, opened, ui }) => {
+  await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+  await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+  await page.tap('.ioss-yt-dl');
+  await until(async () => (await ui('.toast .msg')).some((t) => /Ready: 11\.4 MB/.test(t.text)), 8000, 'ready toast');
+  assert(await clickToastAction(page, 'Save'), 'Save action present');
+  const shared = await until(() => page.evaluate(() => window.__shared), 3000, 'share sheet');
+  assert(shared.length === 1 && shared[0].name === 'Test Video Title.mp4' && shared[0].type === 'video/mp4' && shared[0].size === SIZE,
+    'file offered: ' + JSON.stringify(shared));
+  const ranges = hits.filter((h) => h.includes('googlevideo.com') && /range=\d+-\d+/.test(h));
+  assert(ranges.length === 3, 'downloaded in 3 ranges of 5 MB: ' + ranges.length);
+  assert(opened.length === 0, 'no website opened');
+});
+
+await test('save to photos: falls back to the website when YouTube refuses', {
+  routes: {
+    'https://m.youtube.com/youtubei/v1/player': { status: 200, contentType: 'application/json', body: '{"playabilityStatus":{"status":"LOGIN_REQUIRED"}}' },
+    'https://m.youtube.com/watch': MYT_2026
+  },
+  xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: '{"likes":1,"dislikes":1}' } }
+}, async ({ page, opened, ui }) => {
+  await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+  await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+  await page.tap('.ioss-yt-dl');
+  await until(async () => (await ui('.toast .msg')).some((t) => /Couldn't save this video directly/.test(t.text)), 6000, 'failure toast');
+  assert(await clickToastAction(page, 'Open website'), 'fallback action');
+  await until(() => opened.length > 0, 2000, 'website opened');
+  assert(opened[0].startsWith('https://www.tool77.com/'), 'fallback url: ' + opened[0]);
+});
+
+await test('save to photos: other sites save the on-screen video file; streamed videos fall back', {
+  routes: {
+    'https://www.instagram.com/reel/FILE/': html(SHARE_STUB + '<article><h1>My reel</h1><video src="https://cdn.example/v.mp4" style="width:300px;height:500px"></video></article>'),
+    'https://www.instagram.com/reel/BLOB/': html(SHARE_STUB + '<article><video style="width:300px;height:500px"></video></article><script>document.querySelector("video").src = URL.createObjectURL(new MediaSource());</script>'),
+    'https://cdn.example/': { status: 200, contentType: 'video/mp4', headers: { 'access-control-allow-origin': '*' }, body: Buffer.alloc(3000, 1) }
+  }
+}, async ({ page, ui }) => {
+  const tapFab = () => page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.fab.show').click());
+  await page.goto('https://www.instagram.com/reel/FILE/');
+  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'fab');
+  await tapFab();
+  await until(async () => (await ui('.toast .msg')).some((t) => /Ready/.test(t.text)), 5000, 'ready');
+  await clickToastAction(page, 'Save');
+  const shared = await until(() => page.evaluate(() => window.__shared), 3000, 'shared');
+  assert(shared[0].name === 'My reel.mp4' && shared[0].size === 3000, 'file: ' + JSON.stringify(shared));
+  await page.goto('https://www.instagram.com/reel/BLOB/');
+  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'fab 2');
+  await tapFab();
+  await until(async () => (await ui('.toast .msg')).some((t) => /streams video in pieces/.test(t.text)), 4000, 'explained fallback');
+});
+
+await test('youtube: Shorts keep the floating download button', {
+  routes: { 'https://m.youtube.com/shorts': html('<video style="width:300px;height:500px"></video>') },
+  store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { mode: 'service' } } } }) }
+}, async ({ page, ui, opened }) => {
+  await page.goto('https://m.youtube.com/shorts/abcdefghijk');
+  await until(async () => (await ui('.fab.show')).length > 0, 4000, 'floating button on Shorts');
+  await page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.fab.show').click());
+  await until(() => opened.length > 0, 2000, 'opened');
+  assert(opened[0].includes(encodeURIComponent('https://www.youtube.com/shorts/abcdefghijk')), 'shorts url: ' + opened[0]);
 });
 
 await test('youtube: no download button on the home feed', {
@@ -301,7 +572,7 @@ await test('settings sheet opens with #suite and saves toggles', {
   await page.goto('https://example.com/#suite');
   await until(async () => page.evaluate(() => !!document.querySelector('ioss-ui') && !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet')), 4000, 'sheet');
   const names = await page.evaluate(() => Array.from(document.querySelector('ioss-ui').shadowRoot.querySelectorAll('.mod .n')).map((n) => n.textContent));
-  assert(names.length === 11, 'all modules listed: ' + names.join(', '));
+  assert(names.length === 15, 'all modules listed: ' + names.join(', '));
   assert(await page.evaluate(() => location.hash === ''), 'hash removed');
   await page.evaluate(() => {
     const sw = document.querySelector('ioss-ui').shadowRoot.querySelector('input[aria-label="Enable Reddit: remove login wall"]');
@@ -310,6 +581,261 @@ await test('settings sheet opens with #suite and saves toggles', {
   await until(() => store.has('ioss:state') && JSON.parse(store.get('ioss:state')).modules.reddit.enabled === false, 3000, 'saved');
   const fontSize = await page.evaluate(() => getComputedStyle(document.querySelector('ioss-ui').shadowRoot.querySelector('input[type=number]')).fontSize);
   assert(fontSize === '16px', 'inputs are 16px (no iOS zoom on focus): ' + fontSize);
+});
+
+await test('settings dot: visible by default, draggable, opens settings, remembers position', {
+  routes: { 'https://example.com/': html('<p>hello</p>') }
+}, async ({ page, store }) => {
+  await page.goto('https://example.com/');
+  const dotBox = async () => page.evaluate(() => {
+    const d = document.querySelector('ioss-ui') && document.querySelector('ioss-ui').shadowRoot.querySelector('.dot');
+    if (!d) return null;
+    const r = d.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  const box = await until(dotBox, 4000, 'dot');
+  assert(box.w >= 44 && box.h >= 44 && box.x + box.w <= 375, '44pt dot on screen: ' + JSON.stringify(box));
+  // Drag it to the left edge.
+  await page.mouse.move(box.x + 22, box.y + 22);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 22 - 100, box.y + 22 + 120, { steps: 8 });
+  await page.mouse.up();
+  const moved = await dotBox();
+  assert(moved.x < box.x - 80 && moved.y > box.y + 100, 'dragged: ' + JSON.stringify(moved));
+  assert(!(await page.evaluate(() => !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet'))), 'drag does not open settings');
+  await until(() => store.has('ioss:state') && JSON.parse(store.get('ioss:state')).core.dotPos, 2000, 'position saved');
+  // Tap opens the sheet.
+  await page.mouse.click(moved.x + 22, moved.y + 22);
+  await until(() => page.evaluate(() => !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet')), 2000, 'sheet');
+  // Position survives a reload.
+  await page.reload();
+  const again = await until(dotBox, 4000, 'dot after reload');
+  assert(Math.abs(again.x - moved.x) < 2 && Math.abs(again.y - moved.y) < 2, 'position restored: ' + JSON.stringify(again));
+});
+
+await test('google lite: throttles YouTube telemetry but keeps watch history', {
+  routes: { 'https://m.youtube.com/': strict(html('<script nonce="n0nce">window.__page = 1;</script><p>yt</p>')) }
+}, async ({ page, hits }) => {
+  await page.goto('https://m.youtube.com/');
+  await until(() => page.evaluate(() => !!window.__iossGoogleLite), 4000, 'throttle injected through strict CSP');
+  await page.evaluate(async () => {
+    for (let i = 0; i < 8; i++) await fetch('/api/stats/qoe?n=' + i);
+    for (let i = 0; i < 3; i++) await fetch('/api/stats/watchtime?n=' + i);
+    for (let i = 0; i < 2; i++) await fetch('/youtubei/v1/log_event?n=' + i, { method: 'POST' });
+  });
+  const count = (re) => hits.filter((h) => re.test(h)).length;
+  assert(count(/\/api\/stats\/qoe/) === 5, 'performance pings capped at 5: ' + count(/\/api\/stats\/qoe/));
+  assert(count(/\/api\/stats\/watchtime/) === 3, 'watch history untouched: ' + count(/\/api\/stats\/watchtime/));
+  assert(count(/log_event/) === 1, 'event log throttled: ' + count(/log_event/));
+});
+
+await test('google lite: lazy-loads images added below the fold on Search', {
+  routes: { 'https://www.google.com/search': html('<div style="height:3000px"></div><img id="top" src="data:,">') }
+}, async ({ page }) => {
+  await page.goto('https://www.google.com/search?q=x&safe=off');
+  await page.evaluate(() => {
+    const img = document.createElement('img');
+    img.id = 'late';
+    img.src = 'data:,';
+    document.body.appendChild(img);
+  });
+  await until(() => page.evaluate(() => document.getElementById('late').getAttribute('loading') === 'lazy'), 3000, 'late image lazy');
+  assert(await page.evaluate(() => !!document.querySelector('link[rel=preconnect][href="https://www.gstatic.com"]')), 'preconnect hint in head');
+});
+
+const htmlFilter = (page) => page.evaluate(() => getComputedStyle(document.documentElement).filter);
+
+await test('dark mode: dims and warms light sites by default', {
+  routes: { 'https://light.example/': html('<p>light page</p>') }
+}, async ({ page }) => {
+  await page.goto('https://light.example/');
+  const f = await htmlFilter(page);
+  assert(/brightness\(0\.[56]\) sepia\(0\.[45]\)/.test(f), 'mode 2 filter: ' + f);
+  await sleep(400);
+  assert(await page.evaluate(() => getComputedStyle(document.body).backgroundColor) === 'rgb(255, 255, 255)', 'white backdrop for transparent page');
+});
+
+await test('dark mode: skips sites that are already dark (luminance, html[dark])', {
+  routes: {
+    'https://dark.example/': html('<style>body{background:#1e1e1e;color:#eee}</style><p>dark page</p>'),
+    'https://m.youtube.com/': html('<script>document.documentElement.setAttribute("dark", "")</script><p>yt</p>'),
+    // The original glued R,G,B as text: orange rgb(255,80,0) -> 255800 < 898989
+    // counted as "dark", while dark grey rgb(95,95,95) -> 959595 did not.
+    'https://orange.example/': html('<style>body{background:rgb(255,80,0)}</style><p>orange</p>'),
+    'https://grey.example/': html('<style>body{background:rgb(95,95,95)}</style><p>grey</p>')
+  }
+}, async ({ page }) => {
+  for (const url of ['https://dark.example/', 'https://m.youtube.com/', 'https://grey.example/']) {
+    await page.goto(url);
+    await until(async () => (await htmlFilter(page)) === 'none', 3000, 'filter removed on ' + url);
+  }
+  await page.goto('https://orange.example/');
+  await sleep(600);
+  assert((await htmlFilter(page)) !== 'none', 'bright orange page still filtered');
+});
+
+await test('dark mode: invert mode keeps media and the suite UI un-inverted', {
+  routes: { 'https://light.example/': html('<img id="i" src="data:,"><p>x</p>') },
+  store: { 'ioss:state': JSON.stringify({ modules: { 'dark-mode': { settings: { mode: '3', nightMode: 'same' } } } }) }
+}, async ({ page }) => {
+  await page.goto('https://light.example/#suite');
+  assert(/invert\(0\.9\)/.test(await htmlFilter(page)), 'page inverted');
+  await until(() => page.evaluate(() => !!document.querySelector('ioss-ui')), 3000, 'ui');
+  const r = await page.evaluate(() => [getComputedStyle(document.getElementById('i')).filter, getComputedStyle(document.querySelector('ioss-ui')).filter]);
+  assert(r[0] === 'invert(1)' && r[1] === 'invert(1)', 'media & UI inverted back: ' + r);
+  const sheet = await until(() => page.evaluate(() => {
+    const s = document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet');
+    if (!s) return null;
+    const b = s.getBoundingClientRect();
+    return { top: b.top, bottom: Math.round(b.bottom), h: innerHeight };
+  }), 3000, 'sheet');
+  assert(sheet.top > 0, 'sheet below the top: ' + JSON.stringify(sheet));
+  // The sheet slides in; once settled it sits on the bottom edge.
+  await until(() => page.evaluate(() => Math.round(document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet').getBoundingClientRect().bottom) === innerHeight), 2000, 'sheet anchored to the bottom');
+});
+
+await test('dark mode: "only in Dark Mode" follows the iPhone appearance live', {
+  routes: { 'https://light.example/': html('<p>x</p>') },
+  store: { 'ioss:state': JSON.stringify({ modules: { 'dark-mode': { settings: { followSystem: true } } } }) }
+}, async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('https://light.example/');
+  await sleep(300);
+  assert((await htmlFilter(page)) === 'none', 'off in light appearance');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await until(async () => (await htmlFilter(page)) !== 'none', 2000, 'on after switching to dark');
+});
+
+const LOCKED = `
+  <style>body{-webkit-user-select:none;user-select:none}</style>
+  <p id="t">Protected text</p><textarea id="chat"></textarea>
+  <script nonce="n0nce">
+    document.addEventListener('copy', (e) => { e.preventDefault(); window.__copyHandler = 1; });
+    document.oncontextmenu = () => false;
+    document.body.setAttribute('oncopy', 'return false');
+    document.getElementById('chat').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+  </script>`;
+
+for (const [label, body] of [['plain page', html(LOCKED)], ['strict CSP page', strict(html(LOCKED))]]) {
+  await test(`web limits: copy, select and long-press unblocked (${label})`, {
+    routes: { 'https://locked.example/': body }
+  }, async ({ page }) => {
+    await page.goto('https://locked.example/');
+    await sleep(300);
+    const r = await page.evaluate(() => {
+      const fire = (target, type, init) => { const e = new Event(type, { bubbles: true, cancelable: true, ...init }); target.dispatchEvent(e); return e.defaultPrevented; };
+      const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+      document.getElementById('chat').dispatchEvent(enter);
+      return {
+        copyBlocked: fire(document.getElementById('t'), 'copy'),
+        menuBlocked: fire(document.getElementById('t'), 'contextmenu'),
+        oncopy: document.body.oncopy,
+        select: getComputedStyle(document.body).userSelect,
+        enterStillHandled: enter.defaultPrevented
+      };
+    });
+    assert(!r.copyBlocked && !r.menuBlocked, 'copy/long-press not cancelled: ' + JSON.stringify(r));
+    assert(r.oncopy === null, 'inline oncopy cleared');
+    assert(r.select === 'text', 'text selectable: ' + r.select);
+    assert(r.enterStillHandled, 'Enter-to-send keeps working (original broke this)');
+  });
+}
+
+await test('web limits: leaves excluded sites alone', {
+  routes: { 'https://m.youtube.com/': html(LOCKED.replace(/ nonce="n0nce"/, '')) }
+}, async ({ page }) => {
+  await page.goto('https://m.youtube.com/');
+  await sleep(300);
+  assert(await page.evaluate(() => { const e = new Event('copy', { bubbles: true, cancelable: true }); document.body.dispatchEvent(e); return e.defaultPrevented; }), 'youtube untouched');
+});
+
+const CLEAN_PAGE = html(`
+  <a id="utm" href="https://shop.example/item?id=7&utm_source=news&fbclid=abc&utm_medium=mail">utm</a>
+  <a id="func" href="https://flights.example/search?from=JFK&to=LHR&ref=main&source=en">functional</a>
+  <a id="gbk" href="https://cn.example/s?q=%C4%E3%BA%C3&spm=a.b.c&page=2">gbk</a>
+  <a id="mail" href="mailto:a@b.c?subject=hi">mail</a>`);
+
+await test('clean urls: strips trackers, keeps functional params and their encoding', {
+  routes: { 'https://news.example/': CLEAN_PAGE }
+}, async ({ page }) => {
+  await page.goto('https://news.example/a?utm_source=x&id=5');
+  await until(() => page.evaluate(() => location.search === '?id=5'), 3000, 'address bar cleaned');
+  const r = await page.evaluate(() => Object.fromEntries(['utm', 'func', 'gbk', 'mail'].map((id) => [id, document.getElementById(id).getAttribute('href')])));
+  assert(r.utm === 'https://shop.example/item?id=7', 'trackers removed: ' + r.utm);
+  assert(r.func === 'https://flights.example/search?from=JFK&to=LHR&ref=main&source=en', 'functional params kept: ' + r.func);
+  assert(r.gbk === 'https://cn.example/s?q=%C4%E3%BA%C3&page=2', 'GBK encoding preserved byte-for-byte: ' + r.gbk);
+  assert(r.mail === 'mailto:a@b.c?subject=hi', 'mailto untouched');
+  // Single-page navigation: cleaned, and the app's history.state survives.
+  await page.evaluate(() => {
+    history.pushState({ app: 'route-1' }, '', '/b?utm_campaign=c&x=1');
+    const a = document.createElement('a');
+    a.id = 'late';
+    a.href = 'https://x.example/?utm_term=t&ok=1';
+    document.body.appendChild(a);
+  });
+  await until(() => page.evaluate(() => location.search === '?x=1'), 3000, 'SPA url cleaned');
+  assert(JSON.stringify(await page.evaluate(() => history.state)) === '{"app":"route-1"}', 'history.state preserved');
+  await until(() => page.evaluate(() => document.getElementById('late').getAttribute('href') === 'https://x.example/?ok=1'), 2000, 'new link cleaned');
+});
+
+await test('clean urls: aggressive mode uses the original list', {
+  routes: { 'https://news.example/': CLEAN_PAGE },
+  store: { 'ioss:state': JSON.stringify({ modules: { 'clean-urls': { settings: { aggressive: true } } } }) }
+}, async ({ page }) => {
+  await page.goto('https://news.example/');
+  await until(() => page.evaluate(() => document.getElementById('func').getAttribute('href') === 'https://flights.example/search?to=LHR'), 3000, 'aggressive strip');
+});
+
+await test('clean urls: sign-in pages keep their address; site rules (YouTube, Amazon, Google, GitHub)', {
+  routes: {
+    'https://accounts.example.com/': html('<p>login</p>'),
+    'https://m.youtube.com/': html(`<a id="redir" href="https://www.youtube.com/redirect?event=video_description&redir_token=TOKEN&q=https%3A%2F%2Fexample.com">x</a>
+      <a id="share" href="https://youtu.be/abc?si=TRACK&t=42">s</a>`),
+    'https://www.amazon.com/': html('<a id="p" href="https://www.amazon.com/Some-Thing/dp/B000123/ref=sr_1_1?crid=X&keywords=cup&qid=1&sprefix=c">p</a>'),
+    'https://www.google.com/': html('<a id="h" href="https://example.com/page#utm_source=g&section=2&utm_medium=x">h</a>'),
+    'https://github.com/': html('<a id="g" href="https://github.com/o/r/compare?ref=feature-x&ref_cta=y">g</a>')
+  }
+}, async ({ page }) => {
+  await page.goto('https://accounts.example.com/oauth/authorize?utm_source=x&redir=%2Fhome');
+  await sleep(600);
+  assert(page.url().includes('utm_source=x&redir='), 'auth page untouched: ' + page.url());
+  await page.goto('https://m.youtube.com/');
+  await sleep(400);
+  const yt = await page.evaluate(() => [document.getElementById('redir').getAttribute('href'), document.getElementById('share').getAttribute('href')]);
+  assert(yt[0].includes('redir_token=TOKEN'), 'redir_token kept (original broke these links): ' + yt[0]);
+  assert(yt[1] === 'https://youtu.be/abc?t=42', 'share tracking removed: ' + yt[1]);
+  await page.goto('https://www.amazon.com/s');
+  await sleep(400);
+  const amz = await page.evaluate(() => document.getElementById('p').getAttribute('href'));
+  assert(amz === 'https://www.amazon.com/Some-Thing/dp/B000123/?keywords=cup', 'amazon cleaned: ' + amz);
+  await page.goto('https://www.google.com/');
+  await sleep(400);
+  const g = await page.evaluate(() => document.getElementById('h').getAttribute('href'));
+  assert(g === 'https://example.com/page#section=2', 'fragment trackers removed, rest kept: ' + g);
+  await page.goto('https://github.com/');
+  await sleep(400);
+  const gh = await page.evaluate(() => document.getElementById('g').getAttribute('href'));
+  assert(gh === 'https://github.com/o/r/compare?ref=feature-x', 'github ref kept: ' + gh);
+});
+
+// YouTube (and other single-page apps) rewrite the address as soon as their
+// scripts run, which drops "#suite" before the page has finished loading.
+const STRIPS_HASH = html(`<script>
+  history.replaceState(null, '', location.pathname + location.search);
+  window.addEventListener('hashchange', () => history.replaceState(null, '', location.pathname + location.search));
+</script><p>spa</p>`);
+
+await test('settings sheet opens on sites that strip #suite (YouTube)', {
+  routes: { 'https://m.youtube.com/': STRIPS_HASH }
+}, async ({ page }) => {
+  const sheetOpen = () => page.evaluate(() => !!document.querySelector('ioss-ui') && !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet'));
+  await page.goto('https://m.youtube.com/#suite');
+  await until(sheetOpen, 4000, 'sheet on load');
+  // Close it, then add #suite to the already-open page.
+  await page.evaluate(() => document.querySelector('ioss-ui').shadowRoot.querySelector('.backdrop').click());
+  assert(!(await sheetOpen()), 'closed');
+  await page.evaluate(() => { location.hash = 'suite'; });
+  await until(sheetOpen, 4000, 'sheet after adding #suite');
 });
 
 await test('shortlinks: AdLinkFly go-link page is followed as soon as the link is ready', {
@@ -408,7 +934,8 @@ await test('instagram: close-button mode', {
 
 await test('downloader: Instagram picks the reel that is on screen', {
   routes: { 'https://www.instagram.com/': html(`<div style="height:2000px"><article style="height:600px"><a href="/p/AAA/">a</a><video style="width:300px;height:500px"></video></article>
-    <article style="height:600px"><a href="/reel/BBB/">b</a><video style="width:300px;height:500px"></video></article></div>`) }
+    <article style="height:600px"><a href="/reel/BBB/">b</a><video style="width:300px;height:500px"></video></article></div>`) },
+  store: { 'ioss:state': JSON.stringify({ modules: { downloader: { settings: { mode: 'service' } } } }) }
 }, async ({ page, opened }) => {
   await page.goto('https://www.instagram.com/');
   await page.evaluate(() => window.scrollTo(0, 650));
@@ -462,6 +989,50 @@ await test('frames: ad iframes on random sites stay untouched', {
   assert(!(await frame.evaluate(() => !!document.querySelector('ioss-ui'))), 'no UI in frame');
   assert(store.size <= 1, 'no storage traffic from frames');
 });
+
+// Screenshots of the look (only with SHOTS_DIR set).
+if (process.env.SHOTS_DIR) {
+  const dir = process.env.SHOTS_DIR;
+  const PAGE = html(`<style>body{margin:0;font:17px -apple-system,sans-serif;background:linear-gradient(160deg,#ffd9a0,#ff9bb3 45%,#8fb8ff);min-height:100vh}
+    p{margin:0;padding:14px 16px}</style><h1 style="padding:16px;margin:0">A website</h1>` + '<p>Some text on the page behind the sheet.</p>'.repeat(14));
+  const quiet = { core: { welcomed: true, lastCheck: Date.now() }, modules: { 'dark-mode': { enabled: false }, downloader: { settings: { mode: 'service' } } } };
+  const shadowEval = (page, fn) => page.evaluate((f) => new Function('root', 'return (' + f + ')(root)')(document.querySelector('ioss-ui').shadowRoot), fn.toString());
+  for (const dark of [false, true]) {
+    const tag = dark ? 'dark' : 'light';
+    await test(`shots: settings sheet (${tag})`, { dark, routes: { 'https://example.com/': PAGE }, store: { 'ioss:state': JSON.stringify(quiet) } }, async ({ page }) => {
+      await page.goto('https://example.com/#suite');
+      await until(() => page.evaluate(() => !!document.querySelector('ioss-ui') && !!document.querySelector('ioss-ui').shadowRoot.querySelector('.sheet')), 4000, 'sheet');
+      await sleep(500);
+      await page.screenshot({ path: `${dir}/sheet-${tag}.png` });
+      await shadowEval(page, (r) => { r.querySelector('.more').click(); r.querySelector('.sheet').scrollTop = 60; });
+      await sleep(200);
+      await page.screenshot({ path: `${dir}/sheet-options-${tag}.png` });
+      await shadowEval(page, (r) => { const s = r.querySelector('.sheet'); s.scrollTop = s.scrollHeight; r.querySelector('input.sw').dispatchEvent(new Event('change')); });
+      await sleep(200);
+      await page.screenshot({ path: `${dir}/sheet-bottom-${tag}.png` });
+    });
+  }
+  await test('shots: YouTube buttons, message and floating button', {
+    dark: true,
+    routes: { 'https://m.youtube.com/watch': (u) => (u.includes('v=new') ? MYT_2026 : MYT_WATCH), 'https://m.youtube.com/shorts': html('<body style="background:#111"><video style="width:100%;height:560px;background:linear-gradient(#345,#123)"></video>') },
+    store: { 'ioss:state': JSON.stringify({ modules: quiet.modules }) },
+    xhr: { 'https://returnyoutubedislikeapi.com/votes': { status: 200, text: JSON.stringify({ likes: 211, dislikes: 3 }) } }
+  }, async ({ page, ui }) => {
+    await page.goto(`https://m.youtube.com/watch?v=${VIDEO_ID}`);
+    await until(() => page.$('.ioss-yt-dl'), 4000, 'download button');
+    await until(async () => (await ui('.toast')).length > 0, 5000, 'welcome message');
+    await sleep(400);
+    await page.screenshot({ path: `${dir}/youtube-classic.png` });
+    await page.goto('https://m.youtube.com/watch?v=new');
+    await until(() => page.$('.ioss-yt-dl'), 4000, 'download orb');
+    await sleep(700);
+    await page.screenshot({ path: `${dir}/youtube-2026.png` });
+    await page.goto('https://m.youtube.com/shorts/abcdefghijk');
+    await until(async () => (await ui('.fab.show')).length > 0, 4000, 'floating button');
+    await sleep(300);
+    await page.screenshot({ path: `${dir}/shorts-fab.png` });
+  });
+}
 
 const failed = results.filter(([ok]) => !ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);

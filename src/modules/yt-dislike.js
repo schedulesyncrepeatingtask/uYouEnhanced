@@ -1,7 +1,7 @@
 ({
   id: 'yt-dislike',
   name: 'Return YouTube Dislike',
-  version: '3.2.1',
+  version: '3.2.4',
   api: 1,
   source: 'Return YouTube Dislike 3.2.0-ios (Anarios & JRWR)',
   description: 'Shows dislike counts again (watch pages and Shorts, mobile and desktop) using the returnyoutubedislike.com API, and anonymously contributes your own likes/dislikes.',
@@ -1257,7 +1257,7 @@ function getDislikeButton() {
       buttons.querySelector(SYNTHETIC_SHORTS_DISLIKE_SELECTOR)
     );
   }
-  const firstButton = buttons?.children?.[0];
+  const firstButton = ownChildren(buttons)[0];
   if (!firstButton) {
     return null;
   }
@@ -1274,23 +1274,53 @@ function getDislikeButton() {
       if (!dislikeViewModel) cLog("Dislike button wasn't added to DOM yet...");
       return dislikeViewModel;
     } else {
-      return buttons.children[1] ?? null;
+      // Suite: YouTube's 2026 mobile watch page puts the channel avatar and
+      // the Subscribe button in the same row as like/dislike. The upstream
+      // "second child of the row" guess then pointed at Subscribe, and its
+      // label was overwritten with the dislike count. Find the dislike
+      // control by name, else take the control right after the like button.
+      const named = buttons.querySelector("dislike-button-view-model, ytm-dislike-button-renderer, #dislike-button");
+      if (named) {
+        return named;
+      }
+      const likeControl = getLikeButton();
+      if (likeControl?.matches?.("like-button-view-model, ytm-like-button-renderer, #like-button")) {
+        let next = likeControl.nextElementSibling;
+        while (next?.hasAttribute("data-ioss-owned")) {
+          next = next.nextElementSibling;
+        }
+        if (next) {
+          return next;
+        }
+      }
+      return isMobile ? null : ownChildren(buttons)[1] ?? null;
     }
   }
 }
 
+// Suite: the downloader puts its button in front of the like button. Skip
+// elements the suite owns so the like/dislike buttons are still found by
+// position.
+function ownChildren(buttons) {
+  return Array.from(buttons?.children ?? []).filter((child) => !child.hasAttribute("data-ioss-owned"));
+}
+
 function getLikeButton() {
   const buttons = getButtons();
-  const firstButton = buttons?.children?.[0];
+  const firstButton = ownChildren(buttons)[0];
   if (!firstButton) {
     return null;
   }
 
-  return firstButton.tagName === "YTD-SEGMENTED-LIKE-DISLIKE-BUTTON-RENDERER"
-    ? buttons.querySelector("#segmented-like-button") !== null
+  if (firstButton.tagName === "YTD-SEGMENTED-LIKE-DISLIKE-BUTTON-RENDERER") {
+    return buttons.querySelector("#segmented-like-button") !== null
       ? buttons.querySelector("#segmented-like-button")
-      : firstButton.children[0]
-    : buttons.querySelector("like-button-view-model") ?? firstButton;
+      : firstButton.children[0];
+  }
+  // Suite: on mobile the first item of the row can be the channel avatar,
+  // so only accept a control that is actually a like button there.
+  const namedLike = buttons.querySelector("like-button-view-model, ytm-like-button-renderer, #like-button");
+  return namedLike ?? (isMobile ? null : firstButton);
 }
 
 function getLikeTextContainer() {
@@ -2901,8 +2931,8 @@ function writeMobileDislikes() {
       return;
     }
     const target = dislikeButton.querySelector(".button-renderer-text") ?? getDislikeTextContainer();
-    if (target && target.innerText !== String(mobileDislikes)) {
-      target.innerText = mobileDislikes;
+    if (target && target.textContent !== String(mobileDislikes)) {
+      target.textContent = mobileDislikes;
     }
   } catch (error) {
     cLog("Mobile dislike update failed", error instanceof Error ? error.message : String(error));

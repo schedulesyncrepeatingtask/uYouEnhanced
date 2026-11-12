@@ -1,7 +1,7 @@
 ({
   id: 'yt-player',
   name: 'YouTube: Picture-in-Picture & player tweaks',
-  version: '1.4.0',
+  version: '1.5.0',
   api: 1,
   source: 'YouTube PIP Button (iOS Safari) 1.3 + YouTube options from Bypass All Shortlinks',
   description: 'Adds a Picture-in-Picture button to the YouTube player (m.youtube.com and desktop site). Optional: open Shorts in the normal player and keep playing in the background.',
@@ -85,7 +85,7 @@
         pointer-events: auto !important; vertical-align: middle; }
       .ioss-pip-btn svg { width: 22px; height: 22px; filter: drop-shadow(0 0 2px rgba(0,0,0,.6)); pointer-events: none; }
       .ytp-right-controls .ioss-pip-btn { background: transparent !important; height: 100% !important; margin: 0 !important; border-radius: 0 !important; width: 48px !important; }
-    `, 'ioss-pip-css');
+    ` + (api.aeroCss ? api.aeroCss('.ioss-pip-btn:not(.ytp-right-controls .ioss-pip-btn)') : ''), 'ioss-pip-css');
 
     const PIP_PATH = 'M19 7h-8v6h8V7zm2-4H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H3V5h18v14z';
     const makeButton = () => {

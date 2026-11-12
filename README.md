@@ -1,6 +1,6 @@
 # iOS Userscript Suite
 
-One Safari userscript for iPhone that combines and fixes ten popular userscripts. It's tuned for the
+One Safari userscript for iPhone that combines and fixes fourteen popular userscripts. It's tuned for the
 **iPhone 13 mini** (375 pt wide screen, notch, home indicator, Safari's bottom tab bar), and **every
 module updates itself**.
 
@@ -8,14 +8,68 @@ module updates itself**.
 |---|---|---|
 | Reject cookie banners | Google: Block Cookie Banner 2.0 | Rejects Google's and YouTube's consent dialogs before they appear |
 | Don't Track Me Google | Don't Track Me Google 2.2.2 | Cleans result links, removes ping/click tracking and beacons, can force SafeSearch off |
+| Google Lite | Google Lite 谷歌系轻量化 1.1.1 | Throttles YouTube performance telemetry (never watch history), lazy-loads below-the-fold images on Search/Gmail/Drive, pre-connects to Google's static servers |
 | Reddit: remove login wall | Remove Reddit Login Requirement 1.0.12 | Removes NSFW/login/"open the app" walls, un-blurs, re-enables scrolling |
 | Instagram: browse without logging in | Browse Instagram Without Logging In 1.0 | Hides the login/sign-up wall and bottom banner, re-enables scrolling, opens posts and reels as full pages |
 | YouTube: remove ads | youtube-adb 6.21 | Hides feed/search/banner ads, skips video ads, removes the ad-blocker pop-up |
 | SponsorBlock | Simple Sponsor Skipper 2026.03 | Skips sponsors, intros and other segments (with an **Undo** button) |
 | Return YouTube Dislike | Return YouTube Dislike 3.2.0-ios | Shows dislike counts on m.youtube.com, the desktop site and Shorts |
 | YouTube: PiP & player tweaks | YouTube PIP Button (iOS Safari) 1.3 | Picture-in-Picture button; optional "Shorts → normal player" and background play |
-| Video downloader | All-in-One Video Downloader 1.0.19 | Download button for YouTube, TikTok, Instagram, X, Threads, Facebook, Pinterest, Snapchat, TED, Spotify and more |
+| Video downloader | All-in-One Video Downloader 1.0.19 | Download button that saves the video to your camera roll (YouTube up to 360p), or opens a downloader website for HD, on YouTube, TikTok, Instagram, X, Threads, Facebook, Pinterest, Snapchat, TED, Spotify and more |
+| Dark Mode | Dark Mode 护眼模式 1.5.8 | Dims, warms or inverts every site; skips sites that are already dark; can follow the iPhone's Dark Mode and switch by time of day |
+| Remove web limits | Remove web limits 网页限制解除 1.3 | Lets you select and copy text and use the long-press menu on sites that block it |
+| Clean tracking URLs | Clean Tracking URLs 跟踪链接净化 0.7.8 | Strips tracking parameters from links and the address bar, with extra rules for Bilibili, Baidu, CSDN, Taobao/Alibaba, Douyin/TikTok, Amazon, YouTube, Google, Reddit, LinkedIn, eBay, JD and more |
 | Bypass All Shortlinks | Bypass All Shortlinks 96.8 | Skips link-shortener waiting pages and has optional anti-annoyance tools |
+
+## ClearTube: the full-screen YouTube web app
+
+Safari extensions (and therefore this suite) don't run inside Home Screen web apps. **ClearTube** (`app/`) is a
+separate web app that builds the YouTube features in, so it works full screen without the Safari bar:
+
+- **Sign in with Google** (YouTube's official API): your real subscriptions as the home feed, subscribe and
+  unsubscribe, like and dislike, your liked videos and playlists, and comments
+- YouTube's official embedded player (privacy-enhanced `youtube-nocookie.com`), playing inline
+- **SponsorBlock** skipping with Undo, and segment markers under the title
+- **Dislike counts** (returnyoutubedislike.com), resume where you left off, tappable timestamps
+- Search, channel pages, Watch later, history and "Continue watching" kept on the iPhone
+- Share, Open in YouTube, download website; optional "Hide Shorts"
+- Dark mode, 44 pt controls, safe areas for the notch and home bar; opens offline (app shell cached)
+- Your ad blocker keeps working inside it
+
+The layout follows the familiar mobile YouTube pattern, drawn with ClearTube's own code and icons:
+
+- **Bottom bar:** Home · Subscriptions · Later · You
+- **Top bar:** search and your account picture
+- **Home:** filter chips (All, Unwatched, Today, This week, Continue watching) and full-width cards with
+  channel pictures and a ⋮ menu (Save to Watch later, Share, Go to channel, Copy link, Open in YouTube)
+- **Watch page:**
+  - title, plus a meta line whose **more** opens the description
+  - channel row with the Subscribe pill
+  - one combined 👍 | 👎 pill and a scrolling row of Share / Later / Download / PiP / YouTube
+  - a comments card that opens all comments
+  - more videos from the channel
+- **You:** history and liked videos as swipeable rows, your playlists, Watch later, subscriptions, Settings
+
+What YouTube's API doesn't allow, for any app: reading your YouTube **watch history** or **Watch Later** list
+(ClearTube keeps its own on the phone), and embedded playback doesn't count toward your YouTube history or give
+Premium's ad-free playback. Sign-in lasts an hour at a time and renews itself quietly (a quick hop to Google and
+back). PiP works through Apple's fullscreen player (fullscreen → PiP icon, or swipe home), if iOS allows it in
+web apps.
+
+**Set up**
+1. In the repository settings, open **Pages** and set **Source: GitHub Actions**. Every push to `main` that
+   changes `app/` deploys it to `https://<user>.github.io/<repo>/`.
+2. Open that address in Safari → **Share → Add to Home Screen** (keep "Open as Web App" on), and open the app.
+3. In the [Google Cloud console](https://console.cloud.google.com/):
+   1. Enable **YouTube Data API v3**.
+   2. **OAuth consent screen:** External; add your own Google account as a **test user**.
+   3. **Credentials → Create credentials → OAuth client ID → Web application**, with
+      - Authorized JavaScript origin: `https://<user>.github.io`
+      - Authorized redirect URI: `https://<user>.github.io/<repo>/`
+4. In ClearTube: **You → Settings → One-time setup** → paste the client ID → **Sign in with Google**. Google shows an
+   "unverified app" notice because the app is yours; continue past it.
+
+An API key (Credentials → API key) is optional: it's only used for search and channels while you're signed out.
 
 ## Install on iPhone
 
@@ -30,17 +84,28 @@ module updates itself**.
 
 ### Settings
 
-On any website, add **`#suite`** to the end of the address (for example `youtube.com/#suite`). A bottom sheet
-opens where you can:
+Tap the small **⚙︎ dot** that floats on every page (it fades after a few seconds; drag it wherever you like). You
+can also add **`#suite`** to the end of any address (for example `youtube.com/#suite`). A bottom sheet opens
+where you can:
 
 - turn modules on or off
 - change each module's options
 - turn auto-update on or off for each module
 - run an update check straight away
 - move the floating buttons to the left or right side, or higher or lower on the screen
+- choose the **Look**: **Aero** (default) or **Plain**
 
-If your manager supports menu commands (Stay or Tampermonkey), the sheet is also listed there. You can also turn
-on a small floating ⚙️ button in the sheet.
+**The Aero look** is the glossy "Frutiger Aero" style of the late 2000s: glass panels, sky blue and fresh green,
+and a bright highlight on every button. It applies to the settings sheet, its switches and buttons, messages, the
+settings dot, the floating buttons, and the buttons the suite adds inside pages (YouTube download and
+Picture-in-Picture, the X/Twitter download button). It follows the iPhone's light and dark appearance. Tap
+targets keep Apple's 44 pt size.
+
+If your manager supports menu commands (Stay or Tampermonkey), the sheet is also listed there. You can hide the
+dot in the sheet.
+
+**No dot on any page?** Then the script isn't running. Check that the extension is on, that **All Websites** is
+set to **Allow**, and that the suite is listed and switched on in the extension's popup (the puzzle-piece icon).
 
 ## Auto-update: one layer per module, plus the whole script
 
@@ -57,6 +122,19 @@ on a small floating ⚙️ button in the sheet.
 Updates are fetched from the `main` branch of this repository. They are only as trustworthy as this repository
 itself, which is the same trust you give any auto-updating userscript.
 
+## Speed and battery
+
+- **One page watcher instead of several.** Modules that watch the same part of a page share a single observer.
+  On a YouTube watch page, the Picture-in-Picture button, ad skipping and the download button used three.
+- **Ad skipping watches the player only.** It used to be woken by every class change anywhere on the page; it now
+  listens for the player's own "ad showing" change.
+- **Updated modules load only where they run.** A hot-updated module is read from storage and compiled only on
+  pages it applies to, not on every site. The settings sheet loads the rest when you open it.
+- **Fewer timers.** Where the browser reports address changes itself, the suite checks the address three times
+  less often. Timers are skipped while the tab is in the background.
+- **Fewer layout passes on YouTube.** The download button measures the like button once instead of on every page
+  change, and the dislike counter no longer forces a layout twice a second.
+
 ## What was fixed for iPhone
 
 **Reddit**
@@ -65,6 +143,60 @@ itself, which is the same trust you give any auto-updating userscript.
 - It used to write `style="undefined"` onto elements.
 - It now runs at most once per frame instead of on every DOM change.
 - Un-blurring runs in the page itself, where Reddit's own functions are reachable.
+
+**Dark Mode**
+- It called the synchronous `GM_getValue` on its first line. The Userscripts app only has `GM.getValue`, so it
+  crashed immediately there.
+- All of its settings were menu commands and `prompt()` dialogs, which iOS managers don't offer. They're now in
+  the settings sheet.
+- "Is this site already dark?" glued R, G and B together as text: orange rgb(255,80,0) counted as dark and dark
+  grey rgb(95,95,95) didn't. It now uses real luminance, recognises YouTube's `html[dark]`, and measures the page
+  without its own white fallback background.
+- On `bbs.pcbeta.com` it could poll at full speed forever.
+- New: it reacts live when the iPhone switches between Light and Dark, and when day turns to night. The suite's
+  own UI stays readable in invert mode.
+
+**Remove web limits**
+- Its hooks were installed from Safari's sandbox, where the page never sees them, so only the CSS part worked.
+  They now run inside the page.
+- It ignored `preventDefault()` for keyboard and mouse events on every site, so Enter-to-send in chats also
+  inserted a newline. It also dropped every drag-and-drop listener. Only copy, cut, select and long-press
+  blockers are touched now; dragging and mouse unblocking are options.
+- It called site handlers without `this`, broke listener objects and passive/once options, and leaked listeners.
+  Blocking listeners are now simply not registered.
+- On iPhone the long-press menu is blocked with `-webkit-touch-callout`, which it never reset.
+- It wrote into `<head>` at document-start, where it might not exist yet, and could crash.
+- Sites that need their own copy handling (Google Docs, Notion, GitHub, Office, Figma, …) are excluded by default;
+  the list is editable.
+
+**Clean tracking URLs**
+- It removed `ref`, `from`, `source`, `src`, `redir`, `alias`, `brand`, … on every site, which broke GitHub
+  `?ref=<branch>` links, flight searches (`from=JFK`), date ranges and sign-in redirects. Only clearly-tracking
+  parameters are removed by default now; the original's list is the "Aggressive" option. Its per-site lists are
+  kept, minus a few functional ones (Google `hl`/`sig`, Baidu/Tieba `page`/`type`/`u`/`ie`, YouTube `redir_token`,
+  which external links in video descriptions need).
+- Cleaning the address bar replaced `history.state` with `{}`, which can break Back on single-page sites, and it
+  also rewrote sign-in/OAuth return URLs. The state is kept now, and sign-in pages are left alone.
+- It re-encoded every remaining parameter, garbling GBK searches on Chinese sites. Parameters are now removed from
+  the raw text, leaving the rest byte-for-byte unchanged.
+- It called the synchronous `GM_getValue` (crashes in the Userscripts app) and patched `history` from the sandbox,
+  so single-page navigation was never noticed on iPhone.
+- It attached four listeners to every `<div>` with a class (often thousands), re-cleaned on mouse movement, and
+  overwrote the site's `window.onscroll`. Now: one batched observer and one tap handler.
+- Bugs fixed: the Google fragment cleaner removed 8 items at a time while looping; the Bilibili code crashed on
+  missing elements and injected a login link whose handler couldn't run; the Bilibili live pop-up timer never ran;
+  the YouTube right-click code crashed on m.youtube and added a listener per right-click.
+- Dropped (desktop-only): the Bilibili "copy link with exact time" share helper and the YouTube player right-click
+  copy rewrite.
+
+**Google Lite**
+- Its telemetry budget started at 0 and the refill timer only started once a request got through, so it never
+  refilled. Every matching request was blocked forever, including `/api/stats/playback` and `/watchtime`, which
+  YouTube uses for watch history and resume position. The budget now starts full, and watch history is never
+  throttled (configurable).
+- Its fetch/beacon wrappers only work inside the page; they're now injected there instead of the sandbox.
+- Its 26 px dot (below Apple's 44 pt minimum) became the suite's settings dot, with a 44 pt touch target.
+- Per-site on/off and the options moved to the settings sheet. Hints go in `<head>` instead of a hidden `<div>`.
 
 **Instagram (Browse Without Logging In)**
 - It looked for the pop-up by 2020-era class names (`RnEpo _Yhr4`) that Instagram no longer uses, so it no longer
@@ -98,6 +230,9 @@ itself, which is the same trust you give any auto-updating userscript.
 - Fixed crashes when the buttons haven't rendered yet.
 - Setup polling backs off instead of running 9 times a second forever on pages without buttons.
 - Timers pause while the tab is in the background.
+- YouTube's 2026 mobile watch page puts the channel avatar and the Subscribe button in the same row as the
+  like/dislike buttons. The upstream "second item in the row" guess then overwrote the Subscribe label with the
+  dislike count. Like/dislike are now found by name (or the control right after the like button).
 
 **YouTube PiP button**
 - It kept a reference to an outdated `<video>` element after navigation; the video is now looked up when you tap.
@@ -110,9 +245,22 @@ itself, which is the same trust you give any auto-updating userscript.
   an iPhone nothing showed.
 - It's now a 44 pt floating button that picks the video currently on screen, plus inline buttons on X and
   Threads. Long-press the button to copy the link.
+- On YouTube watch pages the button sits in the action bar, left of the like button, styled like YouTube's own
+  pills (light and dark). Shorts keep the floating button. It copies the like button's colour, background and
+  height, so it matches both the older pill layout and the 2026 icon-only layout. Return YouTube Dislike skips it when locating the
+  like/dislike buttons.
 - It loaded three external libraries (StreamSaver, CryptoJS, JSEncrypt). Two were never used and StreamSaver
   doesn't work on iOS. All three are gone.
 - Direct video files are saved through the iOS share sheet (**Save Video**).
+- **Save to Photos (default):** tapping the button downloads the video inside Safari, then a **Save** button opens
+  the share sheet, where **Save Video** puts it in the camera roll. iOS doesn't let web pages save to Photos
+  without that last tap.
+  - YouTube: the suite asks YouTube's mobile-app API for the file and downloads it in 5 MB pieces. YouTube only
+    offers combined video+audio files up to **360p**; HD comes as separate video and audio streams that would need
+    merging, which isn't practical in Safari. For HD, switch the button to **Open downloader website**.
+  - Other sites: saved directly when the on-screen video plays from a real file. Sites that stream video in
+    pieces (common on Instagram, X and Facebook) fall back to the website, with a button in the message.
+  - Very large videos (over 800 MB) ask first, because the whole file is held in memory.
 
 **Don't Track Me Google**
 - Its beacon, fetch and `href` guards were installed from the sandbox, where on Safari they don't affect the page.
@@ -151,8 +299,10 @@ itself, which is the same trust you give any auto-updating userscript.
 
 ## Privacy notes
 
-- **Downloader:** tapping the button sends the video's page URL to the downloader service (tool77.com, as in the
-  original). You can choose "Just copy the link" instead.
+- **Downloader:** in the default "Save to Photos" mode, videos are fetched from YouTube or the site itself; nothing
+  is sent to a third party. In website mode, or when you tap "Open website" after a failed save, the video's page
+  URL is sent to the downloader service (tool77.com, as in the original). You can choose "Just copy the link"
+  instead.
 - **SponsorBlock:** only the first 4 characters of the video ID's hash are sent (configurable).
 - **Return YouTube Dislike:** sends the video ID, and your vote unless you turn that off.
 - **Bypass All Shortlinks:** the "Route results through the author's blog" option is off by default.
@@ -164,6 +314,7 @@ node build.mjs           # src/ -> dist/ (bundle, meta, per-module files, manife
 node build.mjs --check   # fail if dist/ is stale
 node test/run.mjs        # end-to-end tests in an emulated iPhone 13 mini (needs Playwright + Chromium)
 node test/isolated.mjs   # same, but as a sandboxed content script, like Safari managers run it
+node test/app.mjs        # ClearTube web app, with fake YouTube/SponsorBlock/dislike services
 ```
 
 To release a module update, edit `src/modules/<id>.js`, bump that module's `version`, run `node build.mjs` and
@@ -178,6 +329,7 @@ src/modules/*.js       one file per module (an object literal; also published to
 src/header.js          userscript metadata template
 src/suite.json         suite name, version, repository and branch used for updates
 dist/                  build output — install dist/ios-userscript-suite.user.js
+app/                   ClearTube web app (deployed to GitHub Pages by .github/workflows/pages.yml)
 ```
 
 ## Credits & license
@@ -190,6 +342,10 @@ This suite contains modified versions of:
 - **youtube-adb** by iamfugui (MIT)
 - **Remove Reddit Login Requirement** by SoCuul (MIT)
 - **Browse Instagram Without Logging In** by dankdave69
+- **Google Lite 谷歌系轻量化** (MIT)
+- **Dark Mode 护眼模式** by X.I.U (GPL-3.0)
+- **Remove web limits 网页限制解除** by Cat73 (LGPL-3.0)
+- **Clean Tracking URLs 跟踪链接净化** by cilxe
 - **All-in-One Video Downloader** by Daniel (MIT)
 - **Bypass All Shortlinks** by Bloggerpemula, with thanks to @JustOlaf, @Konf, @hacker09, @juansi, @NotYou,
   @cunaqr, @Rust1667 and @varram (bloggerpemula.pythonanywhere.com)

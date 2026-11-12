@@ -1,5 +1,5 @@
 {
-  "suite": "1.1.0",
+  "suite": "1.6.0",
   "api": 1,
   "modules": {
     "google-consent": {
@@ -15,6 +15,13 @@
       "api": 1,
       "file": "google-privacy.js",
       "sha256": "e328471428acecf228a770ee6681d0ff5358ffa8d0f4572d89d37e42ba3ca5ac"
+    },
+    "google-lite": {
+      "name": "Google Lite (lighter Google & YouTube)",
+      "version": "1.2.0",
+      "api": 1,
+      "file": "google-lite.js",
+      "sha256": "9306b31e7706f85bcd7067c49962b570b42a1e2c7bbef57309a8de125163b710"
     },
     "reddit": {
       "name": "Reddit: remove login wall",
@@ -32,10 +39,10 @@
     },
     "yt-adblock": {
       "name": "YouTube: remove ads",
-      "version": "6.22.0",
+      "version": "6.23.0",
       "api": 1,
       "file": "yt-adblock.js",
-      "sha256": "e45f2f062cfc966a6902e64f5a0377d28a903d424394206e3dd2968c194491d0"
+      "sha256": "ba64c0b8ac0cff73b7d7931cd0d73432181e4087141e91256dfe740f972379d5"
     },
     "yt-sponsorblock": {
       "name": "SponsorBlock: skip sponsors",
@@ -46,24 +53,24 @@
     },
     "yt-dislike": {
       "name": "Return YouTube Dislike",
-      "version": "3.2.1",
+      "version": "3.2.4",
       "api": 1,
       "file": "yt-dislike.js",
-      "sha256": "3f8dd176739ea7e7830d9adef844053761bc8ae12db3ddbea23bd2215927814e"
+      "sha256": "18f5920d23859bab38ad6041995a73f625e174c6eca03d4cc3b359ef69daa19a"
     },
     "yt-player": {
       "name": "YouTube: Picture-in-Picture & player tweaks",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "api": 1,
       "file": "yt-player.js",
-      "sha256": "a8f580a24827edf94dbb56cad31373949dd0161e216a4df5d9b3b71dc58139f4"
+      "sha256": "28aa2009e75bd8a23a17213076511f7e7b213132ee85bb940925fbe9a96f30e9"
     },
     "downloader": {
       "name": "Video downloader",
-      "version": "1.1.0",
+      "version": "1.4.0",
       "api": 1,
       "file": "downloader.js",
-      "sha256": "d7f3ccb5cede7ef1dfb6e2ad410a67f1f3d6cd9870d8e9d892cba89bc24387f7"
+      "sha256": "0f3d73012ff3fbee39a94d396dc22d868da2c1fa402471e6c8a3df7c8e8efd4e"
     },
     "shortlinks": {
       "name": "Bypass All Shortlinks",
@@ -71,6 +78,27 @@
       "api": 1,
       "file": "shortlinks.js",
       "sha256": "aa8878443ef651f089db925bcb79c158b46b0740fc066662f8a84012230f6619"
+    },
+    "dark-mode": {
+      "name": "Dark Mode (eye protection)",
+      "version": "1.6.0",
+      "api": 1,
+      "file": "dark-mode.js",
+      "sha256": "9e9a48e24fe91228aca96cfa3f203ba8a9de53ff11a26a9fefcdfd42b4f9efc2"
+    },
+    "web-limits": {
+      "name": "Remove web limits (copy & select)",
+      "version": "1.4.0",
+      "api": 1,
+      "file": "web-limits.js",
+      "sha256": "cb2a03b7be15666e33d7f1ff9c4159abee3326e7c2952f09e35f9ffcac0ec2d3"
+    },
+    "clean-urls": {
+      "name": "Clean tracking URLs",
+      "version": "0.8.0",
+      "api": 1,
+      "file": "clean-urls.js",
+      "sha256": "9d03c3bf4eb67403f775b43e28e038b64829c3bfb230e3587c6b16a9d9d91207"
     }
   }
 }

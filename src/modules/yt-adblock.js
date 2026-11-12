@@ -1,7 +1,7 @@
 ({
   id: 'yt-adblock',
   name: 'YouTube: remove ads',
-  version: '6.22.0',
+  version: '6.23.0',
   api: 1,
   source: 'youtube-adb 6.21 (iamfugui)',
   description: 'Hides banner/feed/search ads on YouTube (mobile and desktop), skips or fast-forwards video ads and removes the "ad blockers are not allowed" pop-up. Does not interfere with the network.',
@@ -121,11 +121,23 @@
     api.onReady(() => {
       tick();
       // Fix: the original ran four handlers synchronously for every DOM
-      // mutation with two separate observers. One throttled observer now
-      // also watches the player's class (ad start/end is a class change).
-      api.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] }, tick, { throttle: 120 });
+      // mutation with two separate observers. Added and removed nodes are
+      // watched page-wide (shared with the other YouTube modules); the
+      // "ad-showing" class is watched on the player element only, instead
+      // of every class change anywhere on the page.
+      api.observe(document.body, { childList: true, subtree: true }, () => { watchPlayer(); tick(); }, { throttle: 120 });
+      let watched = null;
+      let stopWatch = null;
+      function watchPlayer() {
+        const p = player();
+        if (p === watched && (!p || p.isConnected)) return;
+        if (stopWatch) stopWatch();
+        watched = p;
+        stopWatch = p ? api.observe(p, { attributes: true, attributeFilter: ['class'] }, tick, { throttle: 60 }) : null;
+      }
+      watchPlayer();
       // Safety net while a video page is open.
-      api.every(1000, () => { if (/^\/(watch|shorts|embed)/.test(location.pathname)) tick(); });
+      api.every(1000, () => { if (/^\/(watch|shorts|embed)/.test(location.pathname)) { watchPlayer(); tick(); } });
     });
   }
 })

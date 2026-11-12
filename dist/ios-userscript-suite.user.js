@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iOS Userscript Suite
 // @namespace    https://github.com/schedulesyncrepeatingtask/uYouEnhanced
-// @version      1.1.0
+// @version      1.6.0
 // @description  All-in-one Safari suite tuned for iPhone 13 mini: YouTube ad skipping, SponsorBlock, dislikes, Picture-in-Picture, video downloader, Google anti-tracking and cookie-banner rejection, Reddit login-wall removal and shortlink bypassing. Every module updates itself.
 // @author       iOS Userscript Suite contributors (see README for the original authors)
 // @license      AGPL-3.0-or-later
@@ -49,7 +49,7 @@
    * modules without waiting for a full userscript update.
    * ==================================================================== */
 
-  const SUITE = {"name":"iOS Userscript Suite","version":"1.1.0","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
+  const SUITE = {"name":"iOS Userscript Suite","version":"1.6.0","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
   const RAW = `https://raw.githubusercontent.com/${SUITE.repo}/${SUITE.branch}/dist/`;
   const STATE_KEY = 'ioss:state';
   const CODE_KEY = (id) => `ioss:code:${id}`;
@@ -143,11 +143,41 @@
   // MutationObserver whose callback runs at most once per frame (or after a
   // debounce) instead of once per mutation batch. YouTube/Google mutate the
   // DOM hundreds of times per second; this keeps the phone cool.
+  //
+  // Modules that watch the same node with the same options share ONE
+  // MutationObserver (on YouTube several modules watch <body>): the browser
+  // then builds one list of mutation records instead of one per module.
+  const hubs = new WeakMap(); // node -> Map(optionsKey -> { mo, subs })
+  let observerCount = 0; // live shared observers (shown with debug logging on)
+  const hubKey = (o) => JSON.stringify(Object.keys(o).sort().map((k) => [k, Array.isArray(o[k]) ? o[k].slice().sort() : o[k]]));
+  function joinHub(node, options, notify) {
+    let byKey = hubs.get(node);
+    if (!byKey) hubs.set(node, (byKey = new Map()));
+    const key = hubKey(options);
+    let hub = byKey.get(key);
+    if (!hub) {
+      hub = { subs: new Set(), mo: null, leave: null };
+      hub.mo = new MutationObserver(() => { for (const fn of hub.subs) fn(); });
+      hub.mo.observe(node, options);
+      byKey.set(key, hub);
+      observerCount++;
+      hub.leave = (fn) => {
+        if (!hub.subs.delete(fn) || hub.subs.size) return;
+        hub.mo.disconnect();
+        byKey.delete(key);
+        observerCount--;
+      };
+    }
+    hub.subs.add(notify);
+    return hub;
+  }
   function observe(target, options, callback, { debounce = 0, throttle = 0 } = {}) {
     let scheduled = false;
     let timer = 0;
-    const run = () => { scheduled = false; safe('observer', callback); };
-    const mo = new MutationObserver(() => {
+    let stopped = false;
+    let hub = null;
+    const run = () => { scheduled = false; if (!stopped) safe('observer', callback); };
+    const notify = () => {
       if (debounce) {
         clearTimeout(timer);
         timer = setTimeout(run, debounce);
@@ -156,17 +186,24 @@
       if (scheduled) return;
       scheduled = true;
       if (throttle) timer = setTimeout(run, throttle);
-      else if (document.hidden) setTimeout(run, 250);
+      else if (document.hidden) timer = setTimeout(run, 250);
       else requestAnimationFrame(run);
-    });
+    };
     const start = () => {
+      if (stopped) return;
       const t = typeof target === 'function' ? target() : target;
-      if (t) mo.observe(t, options);
+      if (!t) return;
+      hub = joinHub(t, options, notify);
     };
     if (typeof target === 'function' || target) {
       if (!document.documentElement) whenRoot(start); else start();
     }
-    return () => { mo.disconnect(); clearTimeout(timer); };
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      clearTimeout(timer);
+      if (hub) { hub.leave(notify); hub = null; }
+    };
   }
 
   function waitFor(selector, { timeout = 15000, root = document } = {}) {
@@ -199,13 +236,22 @@
       // Content scripts cannot see the page's history.pushState calls, so we
       // combine cheap polling (only while visible) with the SPA events that
       // YouTube & co. dispatch on the shared DOM.
-      urlPoll = every(400, checkUrl);
+      // Where the Navigation API exists it reports every pushState and
+      // replaceState, so the timer only remains as a slow safety net.
+      let navApi = false;
+      try {
+        if (window.navigation && typeof window.navigation.addEventListener === 'function') {
+          window.navigation.addEventListener('currententrychange', () => setTimeout(checkUrl, 0));
+          window.navigation.addEventListener('navigatesuccess', checkUrl);
+          navApi = true;
+        }
+      } catch (_) { /* optional */ }
+      urlPoll = every(navApi ? 1200 : 400, checkUrl);
       window.addEventListener('popstate', checkUrl, true);
       window.addEventListener('hashchange', checkUrl, true);
       for (const ev of ['yt-navigate-finish', 'state-navigateend', 'yt-page-data-updated', 'spfdone']) {
         document.addEventListener(ev, () => setTimeout(checkUrl, 0), true);
       }
-      try { window.navigation && window.navigation.addEventListener('navigatesuccess', checkUrl); } catch (_) { /* optional */ }
     }
     return () => urlListeners.delete(fn);
   }
@@ -375,7 +421,15 @@
       color: #fff; background: rgba(20,20,20,.62); box-shadow: 0 3px 12px rgba(0,0,0,.35);
       -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); touch-action: manipulation; }
     .fab.show { display: flex; }
+    .dot { position: fixed; top: 0; left: 0; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+      z-index: 2147483601; touch-action: none; -webkit-user-select: none; user-select: none; transition: opacity .3s; will-change: transform; }
+    .dot.idle { opacity: .28; }
+    .dot i { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #1c1c1e;
+      background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.95), rgba(170,178,196,.75));
+      border: 1px solid rgba(0,0,0,.18); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+    .dot svg { width: 16px; height: 16px; pointer-events: none; }
     .fab:active { transform: scale(.92); background: rgba(10,132,255,.85); }
+    .fabs, .dot, .backdrop, .sheet { pointer-events: auto; }
     .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.38); z-index: 2147483646; }
     .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647; max-height: 86vh; max-height: 86dvh;
       overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; background: var(--bg);
@@ -413,16 +467,161 @@
     .foot { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .note { color: var(--mut); font-size: 12px; margin-top: 10px; }
     .banner { background: rgba(10,132,255,.14); border-radius: 10px; padding: 10px 12px; margin: 8px 0; font-size: 14px; }
+    .orb { display: none; }
+    .pill { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 9px; font-size: 11px; font-weight: 600; line-height: 16px;
+      background: rgba(52,199,89,.2); color: #1a8f3c; vertical-align: 1px; }
+    @keyframes rise { from { transform: translateY(36px); opacity: 0; } }
+    @keyframes fade { from { opacity: 0; } }
+    @media (prefers-reduced-motion: no-preference) {
+      .backdrop { animation: fade .2s ease-out; }
+      @media (max-width: 619px) { .sheet { animation: rise .26s cubic-bezier(.2,.8,.2,1); } }
+    }
   `;
+
+  // The "Aero" look: glass panels, glossy buttons, sky blue and fresh green
+  // (the Frutiger Aero style of the late 2000s). Layered on top of the plain
+  // rules above, so "Plain" in the settings simply leaves this class off.
+  const AERO_CSS = `
+    .aero { --bg:#e6f5ff; --fg:#0c2c4d; --mut:#4a6a89; --line:rgba(20,95,170,.2); --acc:#0b7fe0; --card:rgba(255,255,255,.6);
+      --rim:rgba(10,90,170,.5); --glow:rgba(0,90,190,.3); --head:#0a4f9e;
+      --aqua:linear-gradient(180deg,#9be6ff 0%,#41b9f7 46%,#0f86e8 54%,#4bcbf9 100%);
+      --leaf:linear-gradient(180deg,#d2f88a 0%,#86d632 46%,#43aa15 54%,#93e350 100%);
+      --silver:linear-gradient(180deg,#fff 0%,#eef7fd 46%,#d3e6f4 54%,#f3faff 100%);
+      --shine:linear-gradient(180deg,rgba(255,255,255,.85),rgba(255,255,255,.12));
+      font-family: "Frutiger", "Frutiger Linotype", "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui, sans-serif; }
+    @media (prefers-color-scheme: dark) { .aero { --bg:#06203f; --fg:#eaf6ff; --mut:#a3c8ea; --line:rgba(150,210,255,.22); --acc:#6fd0ff;
+      --card:rgba(130,195,255,.12); --rim:rgba(150,215,255,.45); --glow:rgba(0,0,0,.45); --head:#eaf6ff;
+      --silver:linear-gradient(180deg,#6388af 0%,#3d638c 46%,#23456d 54%,#4874a0 100%); } }
+
+    /* glossy buttons: a gradient body, a bright rim and a highlight on the top half */
+    .aero .btn, .aero .fab, .aero .toast button { position: relative; overflow: hidden; isolation: isolate; border: 1px solid var(--rim);
+      background: var(--silver); color: var(--fg);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.9), inset 0 -7px 9px -6px rgba(255,255,255,.6), 0 2px 7px var(--glow); }
+    .aero .btn::before, .aero .fab::before, .aero .toast button::before, .aero .dot i::before, .aero .orb::before { content: ""; position: absolute;
+      z-index: -1; left: 3px; right: 3px; top: 1px; height: 46%; border-radius: inherit; background: var(--shine); opacity: .8; pointer-events: none; }
+    .aero .btn { border-radius: 22px; padding: 0 18px; }
+    .aero .btn.primary { background: var(--aqua); color: #fff; text-shadow: 0 -1px 0 rgba(0,55,120,.55); border-color: rgba(8,84,170,.7); }
+    .aero .btn:active, .aero .toast button:active, .aero .more:active { filter: brightness(.9); }
+
+    /* orbs: floating buttons, the settings dot and the logo in the title bar */
+    .aero .fab, .aero .dot i, .aero .orb { border-radius: 50%; border: 1px solid rgba(255,255,255,.8); color: #fff;
+      background: radial-gradient(circle at 50% 118%, #9af6ff 0%, rgba(154,246,255,0) 58%), var(--aqua);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,.9), 0 0 0 1px rgba(0,80,170,.55), 0 4px 12px rgba(0,70,170,.5);
+      -webkit-backdrop-filter: none; backdrop-filter: none; }
+    .aero .fab::before, .aero .dot i::before, .aero .orb::before { left: 13%; right: 13%; top: 5%; height: 43%; border-radius: 50%; opacity: .9; }
+    .aero .dot i, .aero .orb { position: relative; overflow: hidden; isolation: isolate; }
+    .aero .fab svg, .aero .dot svg, .aero .orb svg { filter: drop-shadow(0 1px 1px rgba(0,50,120,.7)); }
+    .aero .fab:active { filter: brightness(1.15); }
+    .aero .dot.idle { opacity: .42; }
+    .aero .orb { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; flex: none; }
+    .aero .orb svg { width: 17px; height: 17px; }
+
+    /* messages */
+    .aero .toast { position: relative; overflow: hidden; isolation: isolate; border-radius: 16px; border: 1px solid rgba(170,228,255,.65);
+      background: linear-gradient(180deg, rgba(34,128,214,.92), rgba(6,58,128,.94)); text-shadow: 0 1px 1px rgba(0,30,80,.6);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 8px 26px rgba(0,50,130,.45); }
+    .aero .toast::before { content: ""; position: absolute; z-index: -1; left: 0; right: 0; top: 0; height: 50%; pointer-events: none;
+      background: linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,.04)); }
+    .aero .toast button { border-radius: 16px; padding: 0 14px; background: var(--leaf); color: #fff; border-color: rgba(40,110,10,.65);
+      text-shadow: 0 -1px 0 rgba(20,80,0,.55); }
+
+    /* settings sheet: a glass panel with a sky-and-leaf glow and a title bar */
+    .aero .backdrop { background: rgba(4,44,96,.42); }
+    .aero .sheet { border-radius: 22px 22px 0 0; border-top: 1px solid rgba(255,255,255,.95);
+      background: radial-gradient(70% 34% at 100% 0%, rgba(150,236,150,.5), transparent 70%),
+        radial-gradient(90% 40% at 0% 0%, rgba(110,210,255,.8), transparent 72%),
+        linear-gradient(180deg, rgba(236,248,255,.96), rgba(205,232,251,.96));
+      -webkit-backdrop-filter: blur(22px) saturate(1.6); backdrop-filter: blur(22px) saturate(1.6);
+      box-shadow: 0 -12px 44px rgba(0,60,140,.4), inset 0 1px 0 #fff; }
+    .aero .grab { position: relative; z-index: 2; background: rgba(255,255,255,.95); box-shadow: 0 1px 2px rgba(0,60,130,.35); }
+    /* the title bar reaches up behind the grab handle to the top edge */
+    .aero .head { margin: -23px -16px 0; padding: 31px 16px 10px; top: -29px; gap: 10px; border-bottom: 1px solid rgba(255,255,255,.85);
+      box-shadow: 0 1px 0 rgba(20,95,170,.16), 0 6px 14px -8px rgba(0,70,150,.35);
+      background:
+        radial-gradient(circle at 67.4% calc(100% - 43px), rgba(255,255,255,.95) 0 1.5px, transparent 2px),
+        radial-gradient(circle at 69% calc(100% - 37px), transparent 0 8px, rgba(255,255,255,.75) 8.5px 9.5px, transparent 10px),
+        radial-gradient(circle at 51.2% calc(100% - 12px), rgba(255,255,255,.9) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 52% calc(100% - 9px), transparent 0 4.5px, rgba(255,255,255,.7) 5px 5.8px, transparent 6.3px),
+        radial-gradient(circle at 73% calc(100% - 9px), transparent 0 3px, rgba(255,255,255,.65) 3.5px 4.2px, transparent 4.7px),
+        linear-gradient(180deg, rgba(150,220,255,.94), rgba(214,240,255,.9));
+      -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+    .aero .head h2 { color: var(--head); text-shadow: 0 1px 0 rgba(255,255,255,.9); letter-spacing: -.2px; }
+    .aero .card { border-radius: 16px; border: 1px solid rgba(255,255,255,.95);
+      background: linear-gradient(180deg, rgba(255,255,255,.88), rgba(255,255,255,.52));
+      box-shadow: 0 2px 9px rgba(0,70,150,.16), inset 0 1px 0 #fff; }
+    .aero .banner { border-radius: 14px; border: 1px solid rgba(255,255,255,.85); box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+      background: linear-gradient(180deg, rgba(120,210,255,.5), rgba(60,170,245,.26)); }
+    .aero .pill { background: var(--leaf); color: #fff; border: 1px solid rgba(40,110,10,.5); text-shadow: 0 -1px 0 rgba(20,80,0,.5);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.7); }
+    /* "Options": a 30pt glass chip inside a 44pt tap target */
+    .aero .more { border: 7px solid transparent; border-radius: 22px; padding: 0 11px; font-weight: 600; font-size: 13px;
+      background: var(--silver) padding-box; box-shadow: inset 0 0 0 1px var(--rim), inset 0 2px 0 rgba(255,255,255,.85); }
+    .aero input[type=number], .aero input[type=text], .aero select { border: 1px solid var(--rim); border-radius: 10px;
+      background: rgba(255,255,255,.78); box-shadow: inset 0 2px 3px rgba(0,50,110,.18); }
+    .aero input.sw { border: 1px solid rgba(10,80,150,.38); background: linear-gradient(180deg, #aebfd0, #e4edf5);
+      box-shadow: inset 0 2px 4px rgba(0,40,90,.35); }
+    .aero input.sw::after { top: 1px; left: 1px; background: radial-gradient(circle at 36% 28%, #fff 0 28%, #e6eff7 58%, #b7c9db 100%);
+      box-shadow: 0 1px 3px rgba(0,40,90,.45), inset 0 -1px 1px rgba(0,60,120,.2); }
+    .aero input.sw:checked { background: var(--leaf); border-color: rgba(40,110,10,.6);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.55), inset 0 -8px 8px -6px rgba(255,255,255,.55), 0 0 8px rgba(120,220,60,.55); }
+    @media (prefers-color-scheme: dark) {
+      .aero .sheet { border-top-color: rgba(170,225,255,.55);
+        background: radial-gradient(70% 34% at 100% 0%, rgba(70,200,140,.28), transparent 70%),
+          radial-gradient(90% 40% at 0% 0%, rgba(40,150,255,.5), transparent 72%),
+          linear-gradient(180deg, rgba(8,40,80,.95), rgba(4,22,48,.96));
+        box-shadow: 0 -12px 44px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.3); }
+      .aero .grab { background: rgba(200,235,255,.55); box-shadow: none; }
+      .aero .head { border-bottom-color: rgba(160,220,255,.3); box-shadow: 0 6px 14px -8px rgba(0,0,0,.6);
+        background:
+          radial-gradient(circle at 67.4% calc(100% - 43px), rgba(255,255,255,.8) 0 1.5px, transparent 2px),
+          radial-gradient(circle at 69% calc(100% - 37px), transparent 0 8px, rgba(190,235,255,.5) 8.5px 9.5px, transparent 10px),
+          radial-gradient(circle at 51.2% calc(100% - 12px), rgba(255,255,255,.7) 0 1px, transparent 1.5px),
+          radial-gradient(circle at 52% calc(100% - 9px), transparent 0 4.5px, rgba(190,235,255,.45) 5px 5.8px, transparent 6.3px),
+          radial-gradient(circle at 73% calc(100% - 9px), transparent 0 3px, rgba(190,235,255,.4) 3.5px 4.2px, transparent 4.7px),
+          linear-gradient(180deg, rgba(22,96,176,.94), rgba(9,48,98,.92)); }
+      .aero .head h2 { text-shadow: 0 1px 2px rgba(0,20,60,.8); }
+      .aero .card { border-color: rgba(165,220,255,.3); background: linear-gradient(180deg, rgba(150,210,255,.18), rgba(90,160,235,.07));
+        box-shadow: 0 2px 10px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.2); }
+      .aero .btn::before { opacity: .35; }
+      .aero .btn.primary::before { opacity: .8; }
+      .aero .banner { border-color: rgba(165,220,255,.35); box-shadow: inset 0 1px 0 rgba(255,255,255,.2);
+        background: linear-gradient(180deg, rgba(60,160,245,.4), rgba(20,90,180,.25)); }
+      .aero .more { box-shadow: inset 0 0 0 1px var(--rim), inset 0 2px 0 rgba(255,255,255,.25); color: #fff; }
+      .aero input[type=number], .aero input[type=text], .aero select { background: rgba(0,20,50,.5); box-shadow: inset 0 2px 3px rgba(0,0,0,.4); }
+      .aero input.sw { border-color: rgba(150,215,255,.35); background: linear-gradient(180deg, #0c2848, #2a4f79); }
+    }
+  `;
+
+  const useAero = () => (state ? state.core : DEFAULT_CORE).look !== 'plain';
+
+  // The same gloss for buttons that modules put into the page itself (the
+  // YouTube download and Picture-in-Picture buttons). Returns '' in the plain
+  // look, so a module can tell which style is in use.
+  function aeroCss(selector) {
+    if (!useAero()) return '';
+    return `
+      ${selector} { position: relative !important; overflow: hidden !important; isolation: isolate !important; color: #fff !important;
+        border: 1px solid rgba(255,255,255,.75) !important;
+        background: linear-gradient(180deg,#9be6ff 0%,#41b9f7 46%,#0f86e8 54%,#4bcbf9 100%) !important;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.9), inset 0 -7px 9px -6px rgba(255,255,255,.6), 0 0 0 1px rgba(0,80,170,.45), 0 2px 7px rgba(0,70,170,.4) !important; }
+      ${selector}::before { content: ""; position: absolute; z-index: -1; left: 8%; right: 8%; top: 3%; height: 45%; border-radius: 999px;
+        background: linear-gradient(180deg, rgba(255,255,255,.85), rgba(255,255,255,.12)); pointer-events: none; }
+      ${selector} svg { filter: drop-shadow(0 1px 1px rgba(0,50,120,.7)) !important; }
+      ${selector}:active { filter: brightness(.9) !important; opacity: 1 !important; }`;
+  }
 
   let uiRoot = null;
   function ui() {
     if (uiRoot && uiRoot.host.isConnected) return uiRoot;
     const host = document.createElement('ioss-ui');
-    host.style.cssText = 'all: initial !important; position: fixed !important; z-index: 2147483647 !important; top: 0 !important; left: 0 !important; width: 0 !important; height: 0 !important;';
+    // A full-viewport layer that lets taps through. Not 'all: initial' and not
+    // 0x0: page filters (e.g. Dark Mode's invert) must be able to target the
+    // host, and a filtered host becomes the containing block of its fixed
+    // children, so it has to cover the viewport for them to stay in place.
+    host.style.cssText = 'position: fixed !important; inset: 0 !important; width: auto !important; height: auto !important; margin: 0 !important; padding: 0 !important; border: 0 !important; background: none !important; display: block !important; pointer-events: none !important; z-index: 2147483647 !important; transform: none !important; opacity: 1 !important; visibility: visible !important;';
     const shadow = host.attachShadow({ mode: 'open' });
-    shadow.appendChild(el('style', { text: UI_CSS }));
-    const wrap = el('div', { class: 'wrap' }, [el('div', { class: 'toasts' }), el('div', { class: 'fabs' })]);
+    shadow.appendChild(el('style', { text: UI_CSS + AERO_CSS }));
+    const wrap = el('div', { class: useAero() ? 'wrap aero' : 'wrap' }, [el('div', { class: 'toasts' }), el('div', { class: 'fabs' })]);
     shadow.appendChild(wrap);
     (document.body || document.documentElement).appendChild(host);
     uiRoot = { host, shadow, wrap, toasts: wrap.querySelector('.toasts'), fabs: wrap.querySelector('.fabs') };
@@ -442,7 +641,8 @@
     toasts.appendChild(node);
     requestAnimationFrame(() => node.classList.add('show'));
     if (timeout) setTimeout(close, timeout);
-    return { close };
+    // update(): change the text of a long-running toast (e.g. progress).
+    return { close, update: (text) => { node.querySelector('.msg').textContent = text; } };
   }
 
   function positionFabs() {
@@ -486,6 +686,61 @@
     };
   }
 
+  // Draggable settings dot (idea from Google Lite): a 28pt dot inside a 44pt
+  // touch target. It fades after a few seconds, remembers where you left it
+  // and opens the settings sheet when tapped.
+  const GEAR_PATH = 'M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z';
+  function mountDot() {
+    const { wrap } = ui();
+    if (wrap.querySelector('.dot')) return;
+    const SIZE = 44;
+    const node = el('div', { class: 'dot', role: 'button', 'aria-label': `${SUITE.name} settings`, title: `${SUITE.name} settings` }, [el('i', {}, [icon(GEAR_PATH, 16)])]);
+    wrap.appendChild(node);
+    const clamp = (x, y) => ({
+      x: Math.round(Math.min(innerWidth - SIZE - 4, Math.max(4, x))),
+      y: Math.round(Math.min(innerHeight - SIZE - 4, Math.max(4, y)))
+    });
+    // Stored as fractions of the viewport so rotation keeps it on screen.
+    const saved = state.core.dotPos;
+    let pos = saved ? clamp(saved.fx * innerWidth, saved.fy * innerHeight) : clamp(innerWidth - SIZE - 4, innerHeight * 0.32);
+    const apply = () => { node.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)`; };
+    apply();
+    addEventListener('resize', () => { pos = clamp(pos.x, pos.y); apply(); }, { passive: true });
+    let idleTimer = 0;
+    const wake = () => { node.classList.remove('idle'); clearTimeout(idleTimer); idleTimer = setTimeout(() => node.classList.add('idle'), 3500); };
+    wake();
+    let start = null;
+    let moved = false;
+    node.addEventListener('pointerdown', (e) => {
+      start = { x: e.clientX, y: e.clientY, px: pos.x, py: pos.y };
+      moved = false;
+      try { node.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      wake();
+    });
+    node.addEventListener('pointermove', (e) => {
+      if (!start) return;
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      if (!moved && Math.abs(dx) + Math.abs(dy) > 6) moved = true;
+      if (moved) { pos = clamp(start.px + dx, start.py + dy); apply(); }
+    });
+    const end = (e, cancelled) => {
+      if (!start) return;
+      try { node.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      start = null;
+      if (moved) {
+        state.core.dotPos = { fx: pos.x / innerWidth, fy: pos.y / innerHeight };
+        saveState();
+      } else if (!cancelled) {
+        openPanel();
+      }
+      moved = false;
+      wake();
+    };
+    node.addEventListener('pointerup', (e) => end(e, false));
+    node.addEventListener('pointercancel', (e) => end(e, true));
+  }
+
   function whenBody(cb) {
     if (document.body) return cb();
     onReady(cb);
@@ -497,7 +752,9 @@
     autoUpdate: true,
     intervalHours: 12,
     notifyUpdates: true,
-    gear: false,
+    dot: true,
+    dotPos: null,
+    look: 'aero',
     fabSide: 'right',
     fabBottom: 76,
     debug: false,
@@ -585,7 +842,7 @@
       log: (...a) => { if (state.core.debug) console.log(tag, ...a); },
       warn: (...a) => console.warn(tag, ...a),
       el, icon, addStyle, onReady, onLoad, onUrlChange, every, observe, waitFor,
-      request, toast, fab, pageRun, openTab, copy, menu, isGoogleHost, sha256,
+      request, toast, fab, pageRun, openTab, copy, menu, isGoogleHost, sha256, aeroCss,
       storage: {
         get: (k, d) => storage.get(`ioss:${def.id}:${k}`, d),
         set: (k, v) => storage.set(`ioss:${def.id}:${k}`, v),
@@ -593,6 +850,13 @@
       },
       openSettings: () => openPanel(def.id)
     };
+  }
+
+  // Would this module run here? (enabled, allowed in frames, URL matches)
+  function wantsPage(def, url) {
+    const ms = moduleState(def);
+    if (!ms.enabled || (!isTop && !def.frames)) return false;
+    try { return !!def.match(url); } catch (_) { return false; }
   }
 
   function runModule(entry, url) {
@@ -692,7 +956,12 @@
     const id = `o-${def.id}-${opt.key}`;
     const val = mstate.settings[opt.key];
     let input;
-    const commit = (v) => { mstate.settings[opt.key] = v; saveState(); markDirty(); };
+    const commit = (v) => {
+      mstate.settings[opt.key] = v;
+      saveState();
+      markDirty();
+      if (def.id === 'core' && uiRoot) { uiRoot.wrap.classList.toggle('aero', useAero()); positionFabs(); }
+    };
     if (opt.type === 'bool') {
       input = el('input', { id, type: 'checkbox', class: 'sw', checked: !!val, onchange: (e) => commit(e.target.checked) });
     } else if (opt.type === 'number') {
@@ -718,13 +987,20 @@
 
   function openPanel(focusId) {
     if (!isTop) return;
-    whenBody(() => {
+    whenBody(async () => {
+      // Modules that did not run here were not looked up yet (see boot).
+      for (const [id, e] of active) {
+        if (!e.lazy) continue;
+        const r = await resolveModule(BUNDLED.find((b) => b.id === id));
+        active.set(id, Object.assign(r, { matched: false }));
+      }
       closePanel();
       const { wrap } = ui();
       const backdrop = el('div', { class: 'backdrop', onclick: closePanel });
       const sheet = el('div', { class: 'sheet', role: 'dialog', 'aria-label': `${SUITE.name} settings` });
       sheet.appendChild(el('div', { class: 'grab' }));
       sheet.appendChild(el('div', { class: 'head' }, [
+        el('span', { class: 'orb' }, [icon(GEAR_PATH, 17)]),
         el('h2', { text: SUITE.name }),
         el('button', { class: 'btn', type: 'button', text: 'Done', onclick: closePanel })
       ]));
@@ -754,7 +1030,8 @@
           el('div', { class: 'mod' }, [
             el('div', { class: 't' }, [
               el('div', { class: 'n', text: def.name || def.id }),
-              el('div', { class: 'v', text: `v${def.version}${entry.source === 'updated' ? ' (hot-updated)' : ''}${entry.matched ? ' · on this page' : ''}` }),
+              el('div', { class: 'v' }, [`v${def.version}${entry.source === 'updated' ? ' (hot-updated)' : ''}`,
+                entry.matched ? el('span', { class: 'pill', text: 'on this page' }) : null]),
               entry.error ? el('div', { class: 'err', text: `Error: ${entry.error}` }) : null
             ]),
             more,
@@ -771,7 +1048,9 @@
           { key: 'autoUpdate', type: 'bool', label: 'Check for module updates automatically' },
           { key: 'intervalHours', type: 'number', label: 'Check every (hours)', min: 1, max: 168 },
           { key: 'notifyUpdates', type: 'bool', label: 'Show update messages' },
-          { key: 'gear', type: 'bool', label: 'Floating settings button', help: 'Otherwise open settings by adding #suite to any URL' },
+          { key: 'look', type: 'select', label: 'Look', choices: [['aero', 'Aero'], ['plain', 'Plain']],
+            help: 'Aero: glossy glass. Buttons inside pages change after a reload.' },
+          { key: 'dot', type: 'bool', label: 'Settings dot on every page', help: 'Drag it anywhere; it fades when idle. Without it, add #suite to an address.' },
           { key: 'fabSide', type: 'select', label: 'Floating buttons side', choices: [['right', 'Right'], ['left', 'Left']] },
           { key: 'fabBottom', type: 'number', label: 'Floating buttons height (px from bottom)', min: 0, max: 600 },
           { key: 'debug', type: 'bool', label: 'Debug logging (Web Inspector)' }
@@ -802,11 +1081,28 @@
     });
   }
 
-  function handlePanelHash() {
-    const h = (location.hash || '').toLowerCase();
-    if (!PANEL_HASHES.includes(h)) return;
-    try { history.replaceState(history.state, '', location.pathname + location.search); } catch (_) { /* ignore */ }
+  // Single-page sites such as YouTube rewrite the address while loading and
+  // drop "#suite" before DOMContentLoaded, so the hash is read once at
+  // document-start and hashchange is watched from that moment on (using the
+  // event's own newURL, since the site may already have rewritten it).
+  const wantsPanel = (hash) => PANEL_HASHES.includes(String(hash || '').toLowerCase());
+  let panelRequested = isTop && wantsPanel(location.hash);
+  let booted = false;
+
+  function requestPanel() {
+    if (!booted) { panelRequested = true; return; }
+    if (wantsPanel(location.hash)) {
+      try { history.replaceState(history.state, '', location.pathname + location.search); } catch (_) { /* ignore */ }
+    }
     openPanel();
+  }
+
+  if (isTop) {
+    window.addEventListener('hashchange', (e) => {
+      let hash = location.hash;
+      try { hash = new URL(e.newURL).hash; } catch (_) { /* keep location.hash */ }
+      if (wantsPanel(hash)) requestPanel();
+    }, true);
   }
 
   /* ------------------------------------------------------------- boot */
@@ -823,24 +1119,26 @@
     }
 
     state = await loadState();
-    const entries = await Promise.all(BUNDLED.map(resolveModule));
+    // Hot-updated copies are read from storage and compiled only for the
+    // modules that will actually run on this page (the rest wait until the
+    // settings sheet is opened).
+    const entries = await Promise.all(BUNDLED.map((b) => (wantsPage(b, url) ? resolveModule(b) : { def: b, source: 'bundled', lazy: true })));
     for (const e of entries) active.set(e.def.id, e);
-    for (const e of entries) runModule(e, url);
+    for (const e of entries) if (!e.lazy) runModule(e, url);
+    if (state.core.debug) console.log('[iOS Suite]', entries.filter((e) => !e.lazy).length, 'of', entries.length, 'modules on this page');
     if (!isTop) return;
 
     menu('⚙️ iOS Suite settings', () => openPanel());
     menu('🔄 Check for updates', () => checkUpdates(true));
-    window.addEventListener('hashchange', handlePanelHash);
-    onReady(handlePanelHash);
+    booted = true;
+    if (panelRequested) onReady(requestPanel);
 
     onReady(() => {
-      if (state.core.gear) {
-        fab({ title: 'iOS Suite settings', path: 'M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z', onTap: () => openPanel() }).show();
-      }
+      if (state.core.dot) safe('settings dot', mountDot);
       if (!state.core.welcomed && location.protocol === 'https:') {
         state.core.welcomed = true;
         saveState();
-        setTimeout(() => toast(`${SUITE.name} is active.\nAdd ${PANEL_HASHES[0]} to any address to open its settings.`, {
+        setTimeout(() => toast(`${SUITE.name} is active.\nTap the ⚙︎ dot (or add ${PANEL_HASHES[0]} to an address) for settings.`, {
           timeout: 9000, action: 'Settings', onAction: () => openPanel()
         }), 1500);
       }
@@ -1323,6 +1621,145 @@
   }
 }));
 
+  /* ---- module: google-lite v1.2.0 ---- */
+  register(({
+  id: 'google-lite',
+  name: 'Google Lite (lighter Google & YouTube)',
+  version: '1.2.0',
+  api: 1,
+  source: 'Google Lite 谷歌系轻量化 1.1.1',
+  description: 'Throttles YouTube performance telemetry, lazy-loads images and frames below the fold on Google Search, Gmail and Drive, and pre-connects to Google\'s static servers. Does not touch ads, sign-in or the video stream.',
+  runAt: 'start',
+  frames: false,
+  match: (u) => {
+    const h = u.hostname;
+    if (/^(accounts|myaccount|pay)\.google\.com$/.test(h) || u.pathname.startsWith('/sorry/')) return false;
+    return /(^|\.)google\.[a-z.]+$/.test(h) || /(^|\.)youtube\.com$/.test(h) || /(^|\.)gmail\.com$/.test(h);
+  },
+  defaults: { telemetryThrottle: true, keepHistory: true, lazyBelowFold: true, preconnect: true, offSites: '' },
+  options: [
+    { key: 'telemetryThrottle', type: 'bool', label: 'Throttle YouTube telemetry', help: 'At most 5 performance pings per 30 s, 1 event log per 4 s' },
+    { key: 'keepHistory', type: 'bool', label: 'Never throttle watch history & resume position', help: 'Keeps /api/stats/playback and /watchtime untouched' },
+    { key: 'lazyBelowFold', type: 'bool', label: 'Lazy-load below-the-fold images (Search, Gmail, Drive)' },
+    { key: 'preconnect', type: 'bool', label: 'Pre-connect to Google static servers' },
+    { key: 'offSites', type: 'text', label: 'Turn off on these sites', help: 'Comma-separated, e.g. mail.google.com, drive.google.com' }
+  ],
+
+  // Runs in the page world: YouTube's fetch()/sendBeacon() can only be
+  // wrapped there (from Safari's sandbox the wrapper would be invisible).
+  pageThrottle: function (keepHistory) {
+    if (window.__iossGoogleLite) return;
+    window.__iossGoogleLite = true;
+    const METRIC_RE = /(\/youtubei\/v1\/stats\/|\/csi_204|\/ytcsi|\/ytStats|\/ptracking|\/api\/stats\/|\/generate_204)/i;
+    const BUSINESS_RE = /(\/youtubei\/v1\/log_event|\/watchtime|\/playback|\/qoe|\/ytdl)/i;
+    const HISTORY_RE = /\/api\/stats\/(playback|watchtime)|\/youtubei\/v1\/player\/heartbeat/i;
+    const LIMIT = 5;
+    const WINDOW = 30000;
+    const GAP = 4000;
+    // Fix: the original started with a budget of 0 and only started the
+    // refill timer after a request got through, so the budget never
+    // refilled and every matching request was blocked forever, including
+    // watch history and resume position.
+    let budget = LIMIT;
+    let resetTimer = 0;
+    let lastBusiness = 0;
+    const block = (url) => {
+      if (!url) return false;
+      if (keepHistory && HISTORY_RE.test(url)) return false;
+      if (METRIC_RE.test(url)) {
+        if (!resetTimer) resetTimer = setTimeout(() => { budget = LIMIT; resetTimer = 0; }, WINDOW);
+        if (budget <= 0) return true;
+        budget--;
+        return false;
+      }
+      if (BUSINESS_RE.test(url)) {
+        const now = Date.now();
+        if (now - lastBusiness < GAP) return true;
+        lastBusiness = now;
+      }
+      return false;
+    };
+    if (navigator.sendBeacon) {
+      const beacon = navigator.sendBeacon.bind(navigator);
+      navigator.sendBeacon = function (url, data) { return block(String(url || '')) ? true : beacon(url, data); };
+    }
+    if (window.fetch) {
+      const f = window.fetch;
+      window.fetch = function (input, init) {
+        let url = '';
+        try { url = typeof input === 'string' ? input : (input && input.url) || String(input); } catch (_) { /* ignore */ }
+        if (block(url)) return Promise.resolve(new Response(null, { status: 204 }));
+        return f.apply(this, arguments);
+      };
+    }
+  },
+
+  run(api, cfg) {
+    const host = location.hostname.toLowerCase();
+    const off = String(cfg.offSites || '').split(',').map((s) => s.trim().toLowerCase().replace(/^www\./, '')).filter(Boolean);
+    if (off.includes(host.replace(/^www\./, ''))) return;
+
+    const isYouTube = /(^|\.)youtube\.com$/.test(host);
+    const isSearch = api.isGoogleHost(host) && location.pathname.startsWith('/search');
+    const isGmail = host === 'mail.google.com' || /(^|\.)gmail\.com$/.test(host);
+    const isDrive = host === 'drive.google.com' || host === 'docs.google.com';
+
+    // 1. YouTube telemetry throttling (page world; retried once the page
+    //    has a CSP nonce we can borrow).
+    if (cfg.telemetryThrottle && isYouTube) {
+      if (!api.pageRun(this.pageThrottle, !!cfg.keepHistory)) api.onReady(() => api.pageRun(this.pageThrottle, !!cfg.keepHistory) || api.log('telemetry throttle blocked by CSP'));
+    }
+
+    // 2. Pre-connect hints, placed in <head> instead of a hidden <div>.
+    if (cfg.preconnect) {
+      api.onReady(() => {
+        if (document.getElementById('ioss-google-lite-hints')) return;
+        const frag = document.createDocumentFragment();
+        const add = (rel, href, cors) => { const l = document.createElement('link'); l.rel = rel; l.href = href; if (cors) l.crossOrigin = 'anonymous'; frag.appendChild(l); };
+        for (const h of ['https://www.gstatic.com', 'https://fonts.gstatic.com']) if (!location.href.startsWith(h)) add('preconnect', h, true);
+        const extra = isYouTube ? ['https://i.ytimg.com', 'https://yt3.ggpht.com'] : ['https://ssl.gstatic.com', 'https://lh3.googleusercontent.com', 'https://encrypted-tbn0.gstatic.com'];
+        for (const h of extra) add('dns-prefetch', h);
+        const marker = document.createElement('meta');
+        marker.id = 'ioss-google-lite-hints';
+        frag.appendChild(marker);
+        (document.head || document.documentElement).appendChild(frag);
+      });
+    }
+
+    // 3. Lazy-load below the fold. Only new images/frames are visited, in
+    //    one batch per frame, instead of rescanning the whole page.
+    if (cfg.lazyBelowFold && (isSearch || isGmail || isDrive)) {
+      const MARGIN = 200;
+      const mark = (n) => {
+        if (n.hasAttribute('loading')) return;
+        const top = n.getBoundingClientRect().top;
+        if (top > innerHeight + MARGIN) { n.setAttribute('loading', 'lazy'); n.setAttribute('decoding', 'async'); }
+      };
+      const scan = (root) => {
+        if (root.nodeType !== 1) return;
+        if (root.tagName === 'IMG' || root.tagName === 'IFRAME') mark(root);
+        root.querySelectorAll && root.querySelectorAll('img:not([loading]), iframe:not([loading])').forEach(mark);
+      };
+      const pending = new Set();
+      let queued = false;
+      const mo = new MutationObserver((muts) => {
+        for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) pending.add(n);
+        if (!pending.size || queued) return;
+        queued = true;
+        requestAnimationFrame(() => {
+          queued = false;
+          const nodes = Array.from(pending);
+          pending.clear();
+          for (const n of nodes) if (n.isConnected) scan(n);
+        });
+      });
+      const start = () => mo.observe(document.documentElement, { childList: true, subtree: true });
+      if (document.documentElement) start(); else api.onReady(start);
+      api.onReady(() => scan(document.body));
+    }
+  }
+}));
+
   /* ---- module: reddit v1.1.0 ---- */
   register(({
   id: 'reddit',
@@ -1546,11 +1983,11 @@
   }
 }));
 
-  /* ---- module: yt-adblock v6.22.0 ---- */
+  /* ---- module: yt-adblock v6.23.0 ---- */
   register(({
   id: 'yt-adblock',
   name: 'YouTube: remove ads',
-  version: '6.22.0',
+  version: '6.23.0',
   api: 1,
   source: 'youtube-adb 6.21 (iamfugui)',
   description: 'Hides banner/feed/search ads on YouTube (mobile and desktop), skips or fast-forwards video ads and removes the "ad blockers are not allowed" pop-up. Does not interfere with the network.',
@@ -1670,11 +2107,23 @@
     api.onReady(() => {
       tick();
       // Fix: the original ran four handlers synchronously for every DOM
-      // mutation with two separate observers. One throttled observer now
-      // also watches the player's class (ad start/end is a class change).
-      api.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] }, tick, { throttle: 120 });
+      // mutation with two separate observers. Added and removed nodes are
+      // watched page-wide (shared with the other YouTube modules); the
+      // "ad-showing" class is watched on the player element only, instead
+      // of every class change anywhere on the page.
+      api.observe(document.body, { childList: true, subtree: true }, () => { watchPlayer(); tick(); }, { throttle: 120 });
+      let watched = null;
+      let stopWatch = null;
+      function watchPlayer() {
+        const p = player();
+        if (p === watched && (!p || p.isConnected)) return;
+        if (stopWatch) stopWatch();
+        watched = p;
+        stopWatch = p ? api.observe(p, { attributes: true, attributeFilter: ['class'] }, tick, { throttle: 60 }) : null;
+      }
+      watchPlayer();
       // Safety net while a video page is open.
-      api.every(1000, () => { if (/^\/(watch|shorts|embed)/.test(location.pathname)) tick(); });
+      api.every(1000, () => { if (/^\/(watch|shorts|embed)/.test(location.pathname)) { watchPlayer(); tick(); } });
     });
   }
 }));
@@ -1900,11 +2349,11 @@
   }
 }));
 
-  /* ---- module: yt-dislike v3.2.1 ---- */
+  /* ---- module: yt-dislike v3.2.4 ---- */
   register(({
   id: 'yt-dislike',
   name: 'Return YouTube Dislike',
-  version: '3.2.1',
+  version: '3.2.4',
   api: 1,
   source: 'Return YouTube Dislike 3.2.0-ios (Anarios & JRWR)',
   description: 'Shows dislike counts again (watch pages and Shorts, mobile and desktop) using the returnyoutubedislike.com API, and anonymously contributes your own likes/dislikes.',
@@ -3160,7 +3609,7 @@ function getDislikeButton() {
       buttons.querySelector(SYNTHETIC_SHORTS_DISLIKE_SELECTOR)
     );
   }
-  const firstButton = buttons?.children?.[0];
+  const firstButton = ownChildren(buttons)[0];
   if (!firstButton) {
     return null;
   }
@@ -3177,23 +3626,53 @@ function getDislikeButton() {
       if (!dislikeViewModel) cLog("Dislike button wasn't added to DOM yet...");
       return dislikeViewModel;
     } else {
-      return buttons.children[1] ?? null;
+      // Suite: YouTube's 2026 mobile watch page puts the channel avatar and
+      // the Subscribe button in the same row as like/dislike. The upstream
+      // "second child of the row" guess then pointed at Subscribe, and its
+      // label was overwritten with the dislike count. Find the dislike
+      // control by name, else take the control right after the like button.
+      const named = buttons.querySelector("dislike-button-view-model, ytm-dislike-button-renderer, #dislike-button");
+      if (named) {
+        return named;
+      }
+      const likeControl = getLikeButton();
+      if (likeControl?.matches?.("like-button-view-model, ytm-like-button-renderer, #like-button")) {
+        let next = likeControl.nextElementSibling;
+        while (next?.hasAttribute("data-ioss-owned")) {
+          next = next.nextElementSibling;
+        }
+        if (next) {
+          return next;
+        }
+      }
+      return isMobile ? null : ownChildren(buttons)[1] ?? null;
     }
   }
 }
 
+// Suite: the downloader puts its button in front of the like button. Skip
+// elements the suite owns so the like/dislike buttons are still found by
+// position.
+function ownChildren(buttons) {
+  return Array.from(buttons?.children ?? []).filter((child) => !child.hasAttribute("data-ioss-owned"));
+}
+
 function getLikeButton() {
   const buttons = getButtons();
-  const firstButton = buttons?.children?.[0];
+  const firstButton = ownChildren(buttons)[0];
   if (!firstButton) {
     return null;
   }
 
-  return firstButton.tagName === "YTD-SEGMENTED-LIKE-DISLIKE-BUTTON-RENDERER"
-    ? buttons.querySelector("#segmented-like-button") !== null
+  if (firstButton.tagName === "YTD-SEGMENTED-LIKE-DISLIKE-BUTTON-RENDERER") {
+    return buttons.querySelector("#segmented-like-button") !== null
       ? buttons.querySelector("#segmented-like-button")
-      : firstButton.children[0]
-    : buttons.querySelector("like-button-view-model") ?? firstButton;
+      : firstButton.children[0];
+  }
+  // Suite: on mobile the first item of the row can be the channel avatar,
+  // so only accept a control that is actually a like button there.
+  const namedLike = buttons.querySelector("like-button-view-model, ytm-like-button-renderer, #like-button");
+  return namedLike ?? (isMobile ? null : firstButton);
 }
 
 function getLikeTextContainer() {
@@ -4804,8 +5283,8 @@ function writeMobileDislikes() {
       return;
     }
     const target = dislikeButton.querySelector(".button-renderer-text") ?? getDislikeTextContainer();
-    if (target && target.innerText !== String(mobileDislikes)) {
-      target.innerText = mobileDislikes;
+    if (target && target.textContent !== String(mobileDislikes)) {
+      target.textContent = mobileDislikes;
     }
   } catch (error) {
     cLog("Mobile dislike update failed", error instanceof Error ? error.message : String(error));
@@ -4814,11 +5293,11 @@ function writeMobileDislikes() {
   }
 }));
 
-  /* ---- module: yt-player v1.4.0 ---- */
+  /* ---- module: yt-player v1.5.0 ---- */
   register(({
   id: 'yt-player',
   name: 'YouTube: Picture-in-Picture & player tweaks',
-  version: '1.4.0',
+  version: '1.5.0',
   api: 1,
   source: 'YouTube PIP Button (iOS Safari) 1.3 + YouTube options from Bypass All Shortlinks',
   description: 'Adds a Picture-in-Picture button to the YouTube player (m.youtube.com and desktop site). Optional: open Shorts in the normal player and keep playing in the background.',
@@ -4902,7 +5381,7 @@ function writeMobileDislikes() {
         pointer-events: auto !important; vertical-align: middle; }
       .ioss-pip-btn svg { width: 22px; height: 22px; filter: drop-shadow(0 0 2px rgba(0,0,0,.6)); pointer-events: none; }
       .ytp-right-controls .ioss-pip-btn { background: transparent !important; height: 100% !important; margin: 0 !important; border-radius: 0 !important; width: 48px !important; }
-    `, 'ioss-pip-css');
+    ` + (api.aeroCss ? api.aeroCss('.ioss-pip-btn:not(.ytp-right-controls .ioss-pip-btn)') : ''), 'ioss-pip-css');
 
     const PIP_PATH = 'M19 7h-8v6h8V7zm2-4H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H3V5h18v14z';
     const makeButton = () => {
@@ -4941,25 +5420,27 @@ function writeMobileDislikes() {
   }
 }));
 
-  /* ---- module: downloader v1.1.0 ---- */
+  /* ---- module: downloader v1.4.0 ---- */
   register(({
   id: 'downloader',
   name: 'Video downloader',
-  version: '1.1.0',
+  version: '1.4.0',
   api: 1,
   source: 'All-in-One Video Downloader 1.0.19 (Daniel)',
-  description: 'Adds a download button for videos on YouTube, YouTube Music, TikTok, Instagram, X/Twitter, Threads, Facebook, Pinterest, Snapchat, TED, Douyin, Xiaohongshu and Spotify. Tapping it opens the downloader service with the current video. Opening a direct video file shows a Save button.',
+  description: 'Adds a download button for videos on YouTube, YouTube Music, TikTok, Instagram, X/Twitter, Threads, Facebook, Pinterest, Snapchat, TED, Douyin, Xiaohongshu and Spotify. Tapping it downloads the video and offers "Save Video" (camera roll) in the iPhone share sheet; YouTube saves up to 360p this way. Where a site does not allow that, or in website mode, it opens the downloader service instead.',
   runAt: 'ready',
   frames: false,
   SITES: /(^|\.)(youtube\.com|tiktok\.com|instagram\.com|x\.com|twitter\.com|threads\.(com|net)|facebook\.com|pinterest\.[a-z.]+|snapchat\.com|ted\.com|douyin\.com|xiaohongshu\.com|spotify\.com)$/,
   CDN: /(googlevideo\.com|tiktokcdn(-eu|-us|-af)?\.com|douyinvod\.com|fbcdn\.net|twimg\.com|zjcdn\.com|snssdk\.com|tiktokv\.com|douyinstatic\.com|xhscdn\.com|amemv\.com|tikwm\.com|douyinpic\.com|douyinmusicpromotion\.com|cdninstagram\.com|licdn\.com|sc-cdn\.net|pinimg\.com|tedcdn\.com|dmcdn\.net|tumblr\.com|rutube\.ru|uma\.media)$/,
   match: function (u) { return this.SITES.test(u.hostname) || this.CDN.test(u.hostname); },
-  defaults: { fab: true, inlineX: true, service: 'tool77', copyOnLongPress: true },
+  defaults: { mode: 'save', fab: true, ytInline: true, inlineX: true, service: 'tool77', copyOnLongPress: true },
   options: [
+    { key: 'mode', type: 'select', label: 'Download button', choices: [['save', 'Save to Photos (direct; YouTube up to 360p)'], ['service', 'Open downloader website (HD)']] },
     { key: 'fab', type: 'bool', label: 'Floating download button on video pages' },
+    { key: 'ytInline', type: 'bool', label: 'YouTube: download button left of the like button', help: 'Replaces the floating button on watch pages' },
     { key: 'inlineX', type: 'bool', label: 'Download button in X/Twitter & Threads posts' },
     { key: 'copyOnLongPress', type: 'bool', label: 'Long-press the button to copy the video link' },
-    { key: 'service', type: 'select', label: 'Downloader service', choices: [['tool77', 'tool77.com (original service)'], ['copy', 'Just copy the link']] }
+    { key: 'service', type: 'select', label: 'Website mode / fallback', choices: [['tool77', 'tool77.com (original service)'], ['copy', 'Just copy the link']] }
   ],
 
   run(api, cfg) {
@@ -5122,11 +5603,282 @@ function writeMobileDislikes() {
     if (!resolver) return;
 
     const resolve = () => { try { return resolver(); } catch (e) { api.log('resolver failed', e); return null; } };
-    const act = () => {
+    const openWebsite = () => {
       const target = resolve();
       if (target && typeof target === 'object') return api.openTab(target.direct);
       openService(target);
     };
+
+    // ------------------------------------------------------------------
+    // Save to Photos. iOS only lets web pages put a video in the camera
+    // roll through the share sheet ("Save Video"), and only from a tap, so
+    // this downloads the file first and then asks for one more tap.
+    // ------------------------------------------------------------------
+    let saving = null; // { key, blob, name } while a download is ready/running
+    const sanitize = (t) => (String(t || 'video').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'video');
+
+    async function shareFile(blob, name) {
+      const file = new File([blob], name, { type: blob.type && blob.type !== 'application/octet-stream' ? blob.type : 'video/mp4' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file] }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+      }
+      // No share sheet (e.g. desktop): regular download into Files/Downloads.
+      const a = api.el('a', { href: URL.createObjectURL(blob), download: name });
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    }
+
+    // Binary GET: page fetch first (googlevideo allows YouTube's origin),
+    // then GM.xmlHttpRequest, which is not limited by CORS.
+    async function getBytes(url) {
+      try {
+        const r = await fetch(url, { credentials: 'omit' });
+        if (r.ok) return await r.blob();
+        if (r.status === 403 || r.status === 404) throw Object.assign(new Error('HTTP ' + r.status), { fatal: true });
+      } catch (e) { if (e && e.fatal) throw e; }
+      const r = await api.request({ url, responseType: 'blob', timeout: 120000 });
+      if (r.status < 200 || r.status >= 300 || !r.response) throw new Error('HTTP ' + r.status);
+      return r.response instanceof Blob ? r.response : new Blob([r.response]);
+    }
+
+    // googlevideo serves whole files slowly; 5 MB ranges, 3 at a time.
+    async function downloadRanged(url, size, onProgress) {
+      const CHUNK = 5 * 1024 * 1024;
+      const parts = [];
+      let done = 0;
+      const ranges = [];
+      for (let start = 0; start < size; start += CHUNK) ranges.push([start, Math.min(size, start + CHUNK) - 1]);
+      let next = 0;
+      const worker = async () => {
+        while (next < ranges.length) {
+          const i = next++;
+          const [a, b] = ranges[i];
+          const sep = url.includes('?') ? '&' : '?';
+          let blob = null;
+          for (let attempt = 0; attempt < 3 && !blob; attempt++) {
+            try { blob = await getBytes(`${url}${sep}range=${a}-${b}`); } catch (e) { if (e.fatal || attempt === 2) throw e; }
+          }
+          parts[i] = blob;
+          done += blob.size;
+          onProgress(done / size);
+        }
+      };
+      await Promise.all([worker(), worker(), worker()]);
+      return new Blob(parts, { type: 'video/mp4' });
+    }
+
+    // YouTube: ask YouTube's mobile-app API for the video. App clients get
+    // direct MP4 links (the website's own links are scrambled). Only the
+    // combined video+audio files can be saved on the phone; YouTube offers
+    // those up to 360p. Higher qualities are separate video and audio
+    // streams that would need merging.
+    const YT_CLIENTS = [
+      { name: 'ANDROID_VR', id: 28, version: '1.62.27', extra: { deviceMake: 'Oculus', deviceModel: 'Quest 3', osName: 'Android', osVersion: '12L', androidSdkVersion: 32 } },
+      { name: 'IOS', id: 5, version: '20.10.4', extra: { deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.2.22D82' } }
+    ];
+    const pageValue = (key) => {
+      for (const sc of document.querySelectorAll('script:not([src])')) {
+        const m = sc.textContent.match(new RegExp('"' + key + '":"([^"]+)"'));
+        if (m) return m[1];
+      }
+      return '';
+    };
+    const pickMuxed = (resp) => {
+      const formats = ((resp && resp.streamingData && resp.streamingData.formats) || [])
+        .filter((f) => f.url && /^video\/mp4/.test(f.mimeType || ''))
+        .sort((a, b) => (b.height || 0) - (a.height || 0));
+      return formats.map((f) => ({ url: f.url, size: Number(f.contentLength) || 0, quality: f.qualityLabel || (f.height ? f.height + 'p' : ''),
+        title: resp.videoDetails && resp.videoDetails.title }));
+    };
+    async function youtubeCandidates(videoId) {
+      const out = [];
+      const visitor = pageValue('VISITOR_DATA');
+      for (const c of YT_CLIENTS) {
+        try {
+          const r = await fetch('/youtubei/v1/player?prettyPrint=false', {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json', 'X-YouTube-Client-Name': String(c.id), 'X-YouTube-Client-Version': c.version },
+              visitor ? { 'X-Goog-Visitor-Id': visitor } : {}),
+            body: JSON.stringify({
+              context: { client: Object.assign({ clientName: c.name, clientVersion: c.version, hl: document.documentElement.lang || 'en' }, c.extra, visitor ? { visitorData: visitor } : {}) },
+              videoId, contentCheckOk: true, racyCheckOk: true
+            })
+          });
+          if (r.ok) out.push(...pickMuxed(await r.json()));
+        } catch (e) { api.log('player request failed', c.name, e && e.message); }
+      }
+      // Fresh page load: the website's own player data sometimes has plain links.
+      for (const sc of document.querySelectorAll('script:not([src])')) {
+        const i = sc.textContent.indexOf('ytInitialPlayerResponse = ');
+        if (i === -1) continue;
+        try {
+          const json = sc.textContent.slice(i + 26).replace(/;\s*(var |<\/script|$)[\s\S]*/, '');
+          const resp = JSON.parse(json);
+          if (resp.videoDetails && resp.videoDetails.videoId === videoId) out.push(...pickMuxed(resp));
+        } catch (_) { /* not parseable */ }
+      }
+      return out;
+    }
+
+    async function saveDirect() {
+      const key = location.href;
+      if (saving && saving.key === key) {
+        if (saving.blob) return shareFile(saving.blob, saving.name);
+        return api.toast('Still downloading…', { timeout: 1500 });
+      }
+      const ytId = /(^|\.)youtube\.com$/.test(host) && !/(^|\.)music\.youtube\.com$/.test(host)
+        ? (new URLSearchParams(location.search).get('v') || (location.pathname.match(/^\/shorts\/([A-Za-z0-9_-]{11})/) || [])[1])
+        : null;
+      const job = { key, blob: null, name: '' };
+      saving = job;
+      const progress = api.toast('Preparing download…', { timeout: 0 });
+      const setText = (t) => progress && progress.update && progress.update(t);
+      const fail = (why) => {
+        if (saving === job) saving = null;
+        progress && progress.close();
+        api.toast(`Couldn't save this video directly${why ? ` (${why})` : ''}.`, { timeout: 9000, action: 'Open website', onAction: openWebsite });
+      };
+      try {
+        let blob = null;
+        let title = document.title.replace(/ - YouTube$/, '');
+        if (ytId) {
+          const candidates = await youtubeCandidates(ytId);
+          if (!candidates.length) return fail('YouTube did not offer a downloadable file');
+          let lastError = null;
+          for (const c of candidates) {
+            try {
+              if (c.title) title = c.title;
+              const size = c.size;
+              if (size > 800 * 1024 * 1024 && !confirm(`This video is ${(size / 1048576).toFixed(0)} MB. Saving it needs that much memory. Continue?`)) {
+                return fail('too large');
+              }
+              const label = `Downloading${c.quality ? ' ' + c.quality : ''}…`;
+              setText(`${label} 0%`);
+              blob = size
+                ? await downloadRanged(c.url, size, (p) => setText(`${label} ${Math.floor(p * 100)}%`))
+                : await getBytes(c.url);
+              break;
+            } catch (e) { lastError = e; api.log('candidate failed', e && e.message); }
+          }
+          if (!blob) return fail(lastError ? lastError.message : '');
+        } else {
+          // Other sites: the video on screen, if it plays from a real file.
+          const v = mostVisible(document.querySelectorAll('video'));
+          const src = v && (v.currentSrc || v.src || (v.querySelector('source') || {}).src);
+          if (!src || !/^https?:/i.test(src)) return fail('this site streams video in pieces');
+          setText('Downloading…');
+          blob = await getBytes(src);
+          const art = v.closest('article');
+          const caption = art && art.querySelector('h1, h2, [dir="auto"]');
+          if (caption && caption.textContent.trim()) title = caption.textContent.trim();
+        }
+        if (saving !== job) return; // navigated away / restarted
+        job.blob = blob;
+        job.name = sanitize(title) + '.mp4';
+        progress && progress.close();
+        // A fresh tap is required before iOS shows the share sheet.
+        api.toast(`Ready: ${(blob.size / 1048576).toFixed(1)} MB.\nTap Save, then "Save Video".`, {
+          timeout: 120000, action: 'Save', onAction: () => shareFile(job.blob, job.name)
+        });
+      } catch (e) {
+        fail(e && e.message);
+      }
+    }
+
+    const act = () => {
+      const target = resolve();
+      if (cfg.mode === 'service' || (target && typeof target === 'object')) return openWebsite();
+      return saveDirect();
+    };
+
+    // ---- YouTube: a download pill in the action bar, left of the like
+    // button (m.youtube.com and the desktop site). Shorts keep the floating
+    // button because their buttons are a vertical column on the video.
+    const isYouTubeWatch = () => /(^|\.)(m|www)\.youtube\.com$/.test(host) && location.pathname === '/watch';
+    const inlineYouTube = () => {
+      if (!cfg.ytInline || !isYouTubeWatch()) return null;
+      const like = document.querySelector(
+        '.slim-video-action-bar-actions like-button-view-model, .slim-video-action-bar-actions ytm-segmented-like-dislike-button-renderer, ' +
+        'ytm-slim-video-action-bar-renderer like-button-view-model, #top-level-buttons-computed segmented-like-dislike-button-view-model, ' +
+        '#top-level-buttons-computed ytd-segmented-like-dislike-button-renderer, #top-level-buttons-computed like-button-view-model');
+      if (!like) return null;
+      const row = like.closest('.slim-video-action-bar-actions, #top-level-buttons-computed') || like.parentElement;
+      let slot = like;
+      while (slot.parentElement && slot.parentElement !== row) slot = slot.parentElement;
+      const existing = row.querySelector(':scope > .ioss-yt-dl');
+      if (existing) {
+        if (existing.nextElementSibling !== slot) row.insertBefore(existing, slot);
+        matchNative(existing, like);
+        return existing;
+      }
+      const btn = api.el('button', {
+        type: 'button', class: 'ioss-yt-dl', 'data-ioss-owned': '1', 'aria-label': 'Download video', title: 'Download video'
+      }, [api.icon(DL_PATH, 22)]);
+      btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); act(); });
+      let pressTimer = 0;
+      btn.addEventListener('touchstart', () => {
+        if (!cfg.copyOnLongPress) return;
+        pressTimer = setTimeout(() => {
+          pressTimer = -1;
+          const t = resolve();
+          if (t) api.copy(t).then((ok) => api.toast(ok ? 'Video link copied' : t));
+        }, 600);
+      }, { passive: true });
+      btn.addEventListener('touchend', (e) => { if (pressTimer === -1) e.preventDefault(); clearTimeout(pressTimer); pressTimer = 0; });
+      btn.addEventListener('touchmove', () => { clearTimeout(pressTimer); pressTimer = 0; }, { passive: true });
+      row.insertBefore(btn, slot);
+      matchNative(btn, like);
+      return btn;
+    };
+    // Fix: the button used YouTube's theme variables, which the 2026 mobile
+    // layout no longer sets where we looked, so it rendered dark-on-dark and
+    // was practically invisible. It now copies the like button's own colour,
+    // background and height (icon-only in the new layout, a pill in the old).
+    // In the Aero look the button is a glossy blue orb/pill of its own and
+    // only takes its shape and height from the like button. The like button
+    // is measured once per button (and again if YouTube swaps it), not on
+    // every page change.
+    const glossy = api.aeroCss ? api.aeroCss('.ioss-yt-dl') : '';
+    const matched = new WeakMap();
+    function matchNative(btn, like) {
+      const native = like.querySelector('button') || like;
+      const seen = matched.get(btn);
+      if (seen && seen.native === native && Date.now() - seen.at < 5000) return;
+      const st = getComputedStyle(native);
+      const iconOnly = /^(transparent|rgba\(0, 0, 0, 0\))$/.test(st.backgroundColor);
+      btn.classList.toggle('ioss-yt-dl-icon', iconOnly);
+      if (!glossy) {
+        btn.style.setProperty('color', st.color, 'important');
+        btn.style.setProperty('background', iconOnly ? 'transparent' : st.backgroundColor, 'important');
+      }
+      const h = Math.round(native.getBoundingClientRect().height);
+      if (h >= 28 && h <= 64) {
+        // The orb is capped at 44pt (Apple's tap size) so its rim and glow
+        // do not touch the neighbouring 48pt icon buttons.
+        const size = glossy && iconOnly ? Math.min(h, 44) : h;
+        btn.style.setProperty('height', size + 'px', 'important');
+        if (glossy && iconOnly) btn.style.setProperty('width', size + 'px', 'important');
+        matched.set(btn, { native, at: Date.now() });
+      }
+    }
+    if (cfg.ytInline && /(^|\.)(m|www)\.youtube\.com$/.test(host)) {
+      api.addStyle(`
+        .ioss-yt-dl { flex: none; display: inline-flex; align-items: center; justify-content: center; height: 36px; min-width: 44px;
+          padding: 0 12px; margin: 0 8px 0 0; border: 0; border-radius: 18px; cursor: pointer; align-self: center;
+          color: var(--yt-spec-text-primary, #0f0f0f); background: var(--yt-spec-badge-chip-background, rgba(0,0,0,.05));
+          -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+        html[dark] .ioss-yt-dl, [dark] .ioss-yt-dl { color: var(--yt-spec-text-primary, #f1f1f1); background: var(--yt-spec-badge-chip-background, rgba(255,255,255,.1)); }
+        .ioss-yt-dl:active { opacity: .6; }
+        .ioss-yt-dl svg { width: 22px; height: 22px; pointer-events: none; }
+        .ioss-yt-dl.ioss-yt-dl-icon { padding: 0; width: 44px; margin: 0 2px; border-radius: 50%; }
+        .ioss-yt-dl.ioss-yt-dl-icon svg { width: 24px; height: 24px; }
+      ` + glossy + (glossy ? '.ioss-yt-dl.ioss-yt-dl-icon { margin: 0 5px !important; } .ioss-yt-dl.ioss-yt-dl-icon svg { width: 22px; height: 22px; }' : ''), 'ioss-yt-dl-css');
+      inlineYouTube();
+      api.observe(document.body, { childList: true, subtree: true }, inlineYouTube, { throttle: 400 });
+      api.onUrlChange(() => setTimeout(inlineYouTube, 300));
+    }
 
     if (cfg.fab) {
       const button = api.fab({
@@ -5144,7 +5896,8 @@ function writeMobileDislikes() {
       const refresh = () => {
         const hasVideo = !!document.querySelector('video');
         const t = resolve();
-        if (t || (hasVideo && !/(^|\.)youtube\.com$/.test(host))) button.show(); else button.hide();
+        const inline = isYouTubeWatch() && document.querySelector('.ioss-yt-dl');
+        if (!inline && (t || (hasVideo && !/(^|\.)youtube\.com$/.test(host)))) button.show(); else button.hide();
       };
       refresh();
       api.onUrlChange(() => setTimeout(refresh, 400));
@@ -5156,7 +5909,8 @@ function writeMobileDislikes() {
     if (/(^|\.)(x|twitter)\.com$/.test(host)) {
       const SVG = 'M11.99 16l-5.7-5.7L7.7 8.88l3.29 3.3V2.59h2v9.59l3.3-3.3 1.41 1.42-5.71 5.7zM21 15l-.02 3.51c0 1.38-1.12 2.49-2.5 2.49H5.5C4.11 21 3 19.88 3 18.5V15h2v3.5c0 .28.22.5.5.5h12.98c.28 0 .5-.22.5-.5L19 15h2z';
       api.addStyle(`.ioss-x-dl{display:flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;margin-left:4px;color:rgb(113,118,123);border:0;background:none;padding:0;-webkit-tap-highlight-color:transparent}
-        .ioss-x-dl:active{color:rgb(29,155,240)} .ioss-x-dl svg{width:20px;height:20px}`);
+        .ioss-x-dl:active{color:rgb(29,155,240)} .ioss-x-dl svg{width:20px;height:20px}` +
+        (api.aeroCss && api.aeroCss('.ioss-x-dl') ? api.aeroCss('.ioss-x-dl') + '.ioss-x-dl{min-width:34px;min-height:34px;width:34px;height:34px;border-radius:50%!important;align-self:center} .ioss-x-dl svg{width:18px;height:18px}' : ''));
       const scan = () => {
         for (const art of document.querySelectorAll('article:not([data-ioss-dl])')) {
           const media = art.querySelector('[data-testid="videoComponent"], [data-testid="videoPlayer"], button[data-testid="playButton"], div[role="progressbar"]');
@@ -5676,6 +6430,566 @@ function writeMobileDislikes() {
         elementReady(clickMsg).then(() => { setActiveElement('[data-placement-id="revbid-leaderboard"]'); fakeHidden(); });
       }
     });
+  }
+}));
+
+  /* ---- module: dark-mode v1.6.0 ---- */
+  register(({
+  id: 'dark-mode',
+  name: 'Dark Mode (eye protection)',
+  version: '1.6.0',
+  api: 1,
+  source: 'Dark Mode 护眼模式 1.5.8 (X.I.U, GPL-3.0)',
+  description: 'Dims, warms or inverts every website for night reading. Skips sites that already have their own dark theme, can follow the iPhone\'s dark mode, and can use a different mode by day and by night.',
+  runAt: 'start',
+  frames: false,
+  match: (u) => /^https?:$/.test(u.protocol) && u.hostname !== 'live.bilibili.com',
+  defaults: {
+    mode: '2',
+    nightMode: 'same',
+    followSystem: false,
+    runDuringTheDay: true,
+    dayStart: '6:00',
+    nightStart: '18:00',
+    autoRecognition: true,
+    m1Day: 60, m1Night: 50,
+    m2Day: 60, m2DayWarm: 40, m2Night: 50, m2NightWarm: 50,
+    m3Invert: 90,
+    m3Exclude: 'img, .img, video, [style*="background"][style*="url"], svg',
+    forcedSites: '',
+    disabledSites: ''
+  },
+  options: [
+    { key: 'mode', type: 'select', label: 'Mode', choices: [['1', '1 · Dim'], ['2', '2 · Dim + warm'], ['3', '3 · Invert (true dark)']] },
+    { key: 'nightMode', type: 'select', label: 'At night use', choices: [['same', 'Same mode'], ['1', '1 · Dim'], ['2', '2 · Dim + warm'], ['3', '3 · Invert']] },
+    { key: 'followSystem', type: 'bool', label: 'Only when the iPhone is in Dark Mode' },
+    { key: 'runDuringTheDay', type: 'bool', label: 'Also during the day (a little brighter)', help: 'Modes 1 and 2' },
+    { key: 'dayStart', type: 'text', label: 'Day starts at', help: 'e.g. 6:00' },
+    { key: 'nightStart', type: 'text', label: 'Night starts at', help: 'e.g. 18:00' },
+    { key: 'autoRecognition', type: 'bool', label: 'Skip sites that are already dark' },
+    { key: 'm1Day', type: 'number', label: 'Mode 1 brightness by day (%)', min: 1, max: 100 },
+    { key: 'm1Night', type: 'number', label: 'Mode 1 brightness at night (%)', min: 1, max: 100 },
+    { key: 'm2Day', type: 'number', label: 'Mode 2 brightness by day (%)', min: 1, max: 100 },
+    { key: 'm2DayWarm', type: 'number', label: 'Mode 2 warmth by day (%)', min: 0, max: 100 },
+    { key: 'm2Night', type: 'number', label: 'Mode 2 brightness at night (%)', min: 1, max: 100 },
+    { key: 'm2NightWarm', type: 'number', label: 'Mode 2 warmth at night (%)', min: 0, max: 100 },
+    { key: 'm3Invert', type: 'number', label: 'Mode 3 invert strength (%)', min: 50, max: 100 },
+    { key: 'm3Exclude', type: 'text', label: 'Mode 3: keep these un-inverted', help: 'CSS selectors, comma-separated' },
+    { key: 'forcedSites', type: 'text', label: 'Always darken these sites', help: 'Even if they look dark already, e.g. example.com' },
+    { key: 'disabledSites', type: 'text', label: 'Never darken these sites', help: 'Comma-separated hosts' }
+  ],
+
+  run(api, cfg) {
+    const host = location.host.toLowerCase();
+    const list = (s) => String(s || '').split(',').map((x) => x.trim().toLowerCase().replace(/^www\./, '')).filter(Boolean);
+    const bare = host.replace(/^www\./, '');
+    if (list(cfg.disabledSites).includes(bare)) return;
+    const forced = list(cfg.forcedSites).includes(bare);
+    const systemDark = matchMedia('(prefers-color-scheme: dark)');
+    const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+
+    const minutes = (t, d) => {
+      const m = String(t || '').match(/^(\d{1,2})(?::(\d{2}))?$/);
+      return m ? Math.min(23, +m[1]) * 60 + Math.min(59, +(m[2] || 0)) : d;
+    };
+    function isDaytime() {
+      const now = new Date();
+      const t = now.getHours() * 60 + now.getMinutes();
+      const a = minutes(cfg.dayStart, 360);
+      const b = minutes(cfg.nightStart, 1080);
+      return a < b ? t >= a && t < b : t >= a || t < b;
+    }
+
+    function buildCss() {
+      if (cfg.followSystem && !systemDark.matches) return '';
+      const day = isDaytime();
+      let mode = String(cfg.mode);
+      if (!day && cfg.nightMode && cfg.nightMode !== 'same') mode = String(cfg.nightMode);
+      if (mode === '1') {
+        if (day && !cfg.runDuringTheDay) return '';
+        return `html { filter: brightness(${num(day ? cfg.m1Day : cfg.m1Night, 60)}%) !important; }`;
+      }
+      if (mode === '2') {
+        if (day && !cfg.runDuringTheDay) return '';
+        return `html { filter: brightness(${num(day ? cfg.m2Day : cfg.m2Night, 60)}%) sepia(${num(day ? cfg.m2DayWarm : cfg.m2NightWarm, 40)}%) !important; }`;
+      }
+      // Mode 3: invert everything, then invert media back. The suite's own
+      // UI is inverted back too so toasts and the settings sheet look right.
+      let css = `html { filter: invert(${num(cfg.m3Invert, 90)}%) !important; text-shadow: 0 0 0 !important; }
+        ${cfg.m3Exclude || 'img, video, svg'}, ioss-ui, ioss-popup-ask { filter: invert(1) !important; }
+        img[alt="[公式]"] { filter: none !important; }`;
+      if (/(^|\.)search\.bilibili\.com$/.test(location.hostname)) {
+        css += 'ul.video-list img, ul.video-list .video-item .img .mask-video, ul.video-list .video-item .img .van-danmu, ul.video-list .video-item .img .van-framepreview { filter: none !important; }';
+      } else if (/\.bilibili\.com$/.test(location.hostname)) {
+        css += '.bpx-player-container[data-screen="full"] .bpx-player-video-wrap, .bpx-player-container[data-screen="web"] { filter: invert(1) !important; } .bpx-player-container[data-screen="web"] video { filter: none !important; }';
+      } else if (/\.huya\.com$/.test(location.hostname)) {
+        css += '#player-wrap[style="height: 100%;"], .player-loading, .sidebar-show, #player-ctrl-wrap { filter: invert(1) !important; }';
+      }
+      return css;
+    }
+
+    const style = api.addStyle('', 'ioss-darkmode');
+    let backdrop = null;
+    let skipped = false;
+    const apply = () => { style.textContent = skipped ? '' : buildCss(); };
+    apply();
+
+    // Fix: the original compared colours by gluing R, G and B together as
+    // text ("100"+"5"+"5" = 10055 counted as dark, rgb(95,95,95) did not)
+    // and missed YouTube's html[dark]. This uses real luminance.
+    function luminance(el) {
+      const m = getComputedStyle(el).backgroundColor.match(/[\d.]+/g);
+      if (!m || (m.length === 4 && +m[3] < 0.5)) return null;
+      const [r, g, b] = m.slice(0, 3).map((v) => { v = +v / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+    function looksDark() {
+      const root = document.documentElement;
+      const body = document.body;
+      if (!body) return false;
+      if (document.querySelector('html[dark], html[class*=dark], html[data-dark-theme*=dark], html[data-theme*=dark], html[data-color-mode*=dark], html[data-bs-theme=dark], body[class*=dark]')) return true;
+      const meta = document.querySelector('head > meta[name="color-scheme"]');
+      if (meta && /dark/.test(meta.content) && systemDark.matches) return true;
+      if (systemDark.matches && document.querySelector('head > meta[content*="https://challenges.cloudflare.com"]')) return true;
+      const lb = luminance(body);
+      const lr = luminance(root);
+      const l = lb != null ? lb : lr;
+      return l != null && l < 0.2;
+    }
+    function check() {
+      if (!document.body) return;
+      // Measure the page's own colours, not our white fallback background.
+      if (backdrop && backdrop.sheet) backdrop.sheet.disabled = true;
+      const dark = looksDark();
+      if (backdrop && backdrop.sheet) backdrop.sheet.disabled = false;
+      if (cfg.autoRecognition && !forced && dark) {
+        if (!skipped) api.log('site has its own dark theme, filter removed');
+        skipped = true;
+        apply();
+        if (backdrop) { backdrop.remove(); backdrop = null; }
+        return;
+      }
+      // Transparent pages need a white background or the filter has nothing to dim.
+      if (!backdrop && luminance(document.body) == null && luminance(document.documentElement) == null) {
+        backdrop = api.addStyle('html, body { background-color: #ffffff !important; }', 'ioss-darkmode-bg');
+      }
+    }
+    api.onReady(() => setTimeout(check, 150));
+    api.onLoad(() => setTimeout(check, 1500));
+
+    // Live updates: iPhone appearance changes, and day/night boundaries
+    // (checked once a minute, only while the tab is visible).
+    try { systemDark.addEventListener('change', apply); } catch (_) { systemDark.addListener(apply); }
+    let lastDay = isDaytime();
+    api.every(60000, () => { const d = isDaytime(); if (d !== lastDay) { lastDay = d; apply(); } });
+  }
+}));
+
+  /* ---- module: web-limits v1.4.0 ---- */
+  register(({
+  id: 'web-limits',
+  name: 'Remove web limits (copy & select)',
+  version: '1.4.0',
+  api: 1,
+  source: 'Remove web limits 网页限制解除 1.3 (Cat73, LGPL-3.0)',
+  description: 'Lets you select and copy text, and use the long-press menu, on sites that block it.',
+  runAt: 'start',
+  frames: false,
+  match: (u) => /^https?:$/.test(u.protocol),
+  defaults: {
+    dropHandlers: true,
+    allowDrag: false,
+    aggressive: false,
+    excludeSites: 'youtube.com, wikipedia.org, mail.qq.com, translate.google.*, docs.google.com, notion.so, office.com, figma.com, github.com'
+  },
+  options: [
+    { key: 'dropHandlers', type: 'bool', label: 'Ignore sites\' copy/select/long-press blockers', help: 'Off: only stop them from cancelling the action' },
+    { key: 'allowDrag', type: 'bool', label: 'Also unblock dragging text', help: 'Can break drag-and-drop on some sites' },
+    { key: 'aggressive', type: 'bool', label: 'Aggressive: also unblock mouse-down', help: 'For sites that block selection on press' },
+    { key: 'excludeSites', type: 'text', label: 'Leave these sites alone', help: 'Comma-separated; * matches any ending, e.g. translate.google.*' }
+  ],
+
+  // Runs in the page world: the original hooked addEventListener and
+  // preventDefault from Safari's isolated world, where the page never sees it.
+  pageUnlock: function (cfg) {
+    if (window.__iossUnlock) return;
+    window.__iossUnlock = true;
+    const blocked = ['contextmenu', 'select', 'selectstart', 'copy', 'cut']
+      .concat(cfg.allowDrag ? ['dragstart'] : [])
+      .concat(cfg.aggressive ? ['mousedown', 'mouseup'] : []);
+    const isBlocked = (t) => blocked.indexOf(t) !== -1;
+
+    // Fix: the original also ignored preventDefault() for keydown/keyup and
+    // mouse events on every site (Enter-to-send in chats inserted newlines
+    // too, custom drag/focus broke) and dropped every dragstart listener.
+    // Only the events that actually block copying are touched now.
+    const pd = Event.prototype.preventDefault;
+    Event.prototype.preventDefault = function () { if (!isBlocked(this.type)) return pd.apply(this, arguments); };
+    try {
+      const rv = Object.getOwnPropertyDescriptor(Event.prototype, 'returnValue');
+      if (rv && rv.set) {
+        Object.defineProperty(Event.prototype, 'returnValue', {
+          configurable: true, enumerable: rv.enumerable, get: rv.get,
+          set(v) { if (v === false && isBlocked(this.type)) return; rv.set.call(this, v); }
+        });
+      }
+    } catch (_) { /* ignore */ }
+
+    // Fix: the original wrapped listeners and called them without `this`,
+    // ignored listener objects and passive/once options, and treated an
+    // options object as "capture". Listeners for blocking events are now
+    // simply not registered; everything else goes through untouched.
+    if (cfg.dropHandlers) {
+      const add = EventTarget.prototype.addEventListener;
+      const drop = ['contextmenu', 'select', 'selectstart', 'copy', 'cut'].concat(cfg.allowDrag ? ['dragstart'] : []);
+      EventTarget.prototype.addEventListener = function (type, listener, options) {
+        if (drop.indexOf(type) !== -1 && (this === window || this === document || this === document.documentElement || this === document.body || (this && this.nodeType === 1 && !this.isContentEditable && !/^(INPUT|TEXTAREA)$/.test(this.tagName)))) return undefined;
+        return add.call(this, type, listener, options);
+      };
+    }
+
+    // DOM0 handlers such as oncopy="return false" cancel events without
+    // calling preventDefault(), so they are cleared. Only the usual hosts and
+    // elements with such attributes are visited, not every element.
+    const props = blocked.map((n) => 'on' + n);
+    const clear = (el) => { for (const p of props) { try { if (el && el[p]) el[p] = null; } catch (_) { /* ignore */ } } };
+    const sweep = () => {
+      clear(window);
+      clear(document);
+      clear(document.documentElement);
+      clear(document.body);
+      try { document.querySelectorAll(props.map((p) => `[${p}]`).join(',')).forEach(clear); } catch (_) { /* ignore */ }
+    };
+    sweep();
+    document.addEventListener('DOMContentLoaded', sweep, true);
+    window.addEventListener('load', sweep, true);
+    setTimeout(sweep, 2500);
+    setInterval(() => { if (!document.hidden) sweep(); }, 30000);
+  },
+
+  run(api, cfg) {
+    const target = (location.host + location.pathname).toLowerCase();
+    const excluded = String(cfg.excludeSites || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).some((pat) => {
+      const re = new RegExp('(^|\\.)' + pat.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '(/|$)');
+      return re.test(target);
+    });
+    if (excluded) return;
+
+    // iPhone: long-press callouts are blocked with -webkit-touch-callout,
+    // which the original never reset. Form fields keep their own behaviour.
+    api.addStyle(`
+      html, *:not(input):not(textarea):not([contenteditable]) { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }
+    `, 'ioss-web-limits');
+
+    const snapshot = JSON.parse(JSON.stringify(cfg));
+    if (!api.pageRun(this.pageUnlock, snapshot)) {
+      // Strict CSP: retry once the page exposes a nonce. preventDefault and
+      // DOM0 clearing still apply to everything registered before that.
+      api.onReady(() => api.pageRun(this.pageUnlock, snapshot) || api.log('page access blocked; CSS unlock only'));
+    }
+  }
+}));
+
+  /* ---- module: clean-urls v0.8.0 ---- */
+  register(({
+  id: 'clean-urls',
+  name: 'Clean tracking URLs',
+  version: '0.8.0',
+  api: 1,
+  source: 'Clean Tracking URLs 跟踪链接净化 0.7.8 (cilxe)',
+  description: 'Removes tracking parameters from links and from the address bar on every site, with extra rules for Bilibili, Baidu, CSDN, Alibaba/Taobao, Douyin/TikTok, Amazon, YouTube, Google, Reddit, LinkedIn, eBay, JD and more.',
+  runAt: 'start',
+  frames: false,
+  match: (u) => /^https?:$/.test(u.protocol) && !/(^|\.)(hdslb\.com|csdnimg\.cn)$/.test(u.hostname),
+  defaults: { cleanAddressBar: true, aggressive: false, siteExtras: true, extraParams: '', keepParams: '', excludeSites: '' },
+  options: [
+    { key: 'cleanAddressBar', type: 'bool', label: 'Also clean the address bar', help: 'Never on sign-in / OAuth pages' },
+    { key: 'aggressive', type: 'bool', label: 'Aggressive (original list)', help: 'Also strips ref, from, source, src, redir, … everywhere. Can break logins, GitHub branch links and searches.' },
+    { key: 'siteExtras', type: 'bool', label: 'Site extras', help: 'Bilibili/Baidu ads & login pop-ups, Zhihu/Xiaohongshu login modals, …' },
+    { key: 'extraParams', type: 'text', label: 'Also remove these parameters', help: 'Space or comma separated' },
+    { key: 'keepParams', type: 'text', label: 'Never remove these parameters' },
+    { key: 'excludeSites', type: 'text', label: 'Leave these sites alone', help: 'Comma-separated hosts' }
+  ],
+
+  run(api, cfg) {
+    const host = location.hostname.toLowerCase();
+    const words = (s) => String(s || '').split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+    if (words(cfg.excludeSites).some((h) => host === h.toLowerCase() || host.endsWith('.' + h.toLowerCase()))) return;
+
+    // ---- parameter tables -------------------------------------------------
+    // Clearly-tracking parameters, removed everywhere.
+    const SAFE = new Set(['utm_id', 'utm_content', 'utm_source', 'utm_medium', 'utm_sources', 'utm_term', 'utm_campaign',
+      'utm_referrer', 'utm_keyword', 'spm', 'scm', 'vd_source', 'spm_id_from', 'fbclid', 'gclid', 'dclid', 'gbraid', 'wbraid',
+      'msclkid', 'yclid', 'igshid', 'mc_cid', 'mc_eid', '_hsenc', '_hsmi', 'mkt_tok', 'trk', 'trkInfo']);
+    const SAFE_RE = /^(utm_|spm_|scm_|share_(medium|plat|source|tag|session_id|from)$|embeds_(referring_euri|euri|referring_origin)$)/;
+    // The original's generic list: these are often functional (ref, from,
+    // source, src, redir, …), so they are only removed in aggressive mode.
+    const AGGRESSIVE = new Set(['mkt', 'src', 'from', 'source', 'alias', 'brand', 'curator_clanid', 'snr', 'redir', 'sprefix', 'ref', 'feature']);
+    const AGGRESSIVE_RE = /^(spm|from_|ref_|track|trk|share_|embeds_|refer_)|_from$|scm|referrer/;
+
+    const ALI_RE = /^(utm_|spm_|from_|ref|track|wh_|wx_)/;
+    const AMZN_RE = /_ref|^(utm_|ref|pd_rd_|pf_rd_|track|sc_)/i;
+    const commonPlus = (list, re) => ({ params: list, re });
+    // [host test, rule]. Rules: params (removed on this site, from all links),
+    // re (regex of names), keep (never removed), extra (site extras).
+    const SITES = [
+      [/(^|\.)(bilibili|biligame)\.com$/, { params: ['vd_source', 'hotRank', 'launch_id', 'popular_rank', 'session_id', 'business', 'sort_field',
+        'is_room_feed', 'visit_id', 'is_live_full_webview', 'is_live_webview', 'vt', 'theme', 'noReffer', 'timestamp', 'unique_k', 'hasBack',
+        'noTitleBar', 'plat_id', 'is_preview', 'buvid', 'up_id', 'is_story_h5', 'hybrid_set_header', 'lottery_id', 'seid', '-Abrowser', 'from',
+        'pagefrom', 'schema', 'preUrl', 'jumpLinkType', 'referfrom', 'spm_id', 'p2p_type', 'broadcast_type', 'event_source_type'],
+      re: /^(utm_|share_|spm|from_)|(From|_from|source)$/, extra: 'bilibili' }],
+      [/(^|\.)baidu\.com$/, { params: ['rsv_idx', 'hisfilter', 'rsf', 'rsv_pq', 'rsv_t', 'qid', 'rsv_dl', 'oq', 'gpc', 'usm', 'tfflag', 'bs', 'rqlang',
+        'tn', 'sc_us', 'wfr', 'fenlei', 'platform', 'rqid', 'base_query', 'entry', 'qbl', 'for', 'from', 'topic_pn', 'rsp', 'rs_src', 'f', 'rsv_page',
+        'dyTabStr', 'ct', 'lm', 'site', 'sites', 'fr', 'cl', 'bsst', 'lid', 'rsv_spt', 'rsv_bp', 'src', 'sfrom', 'refer', 'zp_fr', 'channel', 'p_from',
+        'n_type', 'eqid', '_at_', 'sa', 'pd', 'source', 'tag_key', 'uname', 'uid', 'fromModule', 'lemmaFrom', 'structureId', 'structureClickId',
+        'structureItemId', 'xzhid', 'rsv_enter', 'rsv_btype', 'prefixsug', 'client_type', 'task', 'locate', 'is_new_user', 'frwh', 'obj_id',
+        'fid', 'fname', '_t', 'topic_name', 'frs', 'share_from', 'tpl', 'tb_mod', 'tb_fr', 'share', 'sfc', 'idfrom', 'client_version', 'st',
+        'qq-pf-to', 'unique', 'is_video', '_wkts_', 'ai', 'ck', 'shh', 'toc_style_id', 'share_to', 'track_id'],
+      // Fix: the original also removed "page", "type" and "u" (pagination,
+      // tabs and sign-in return links on Tieba/Passport) and "ie" on Tieba.
+      keep: ['page', 'type', 'u', 'ie', 'pn', 'kw', 'wd', 'word'], extra: 'baidu' }],
+      [/(^|\.)(tiktok|douyin)\.com$/, { params: ['rsv_idx', 'hisfilter', 'source', 'aid', 'enter_from', 'focus_method', 'previous_page', 'extra_params',
+        'gid', 'enter_method', 'is_from_webapp', 'sender_device', 'web_id'] }],
+      [/(^|\.)csdn\.net$/, { params: ['ops_request_misc', 'request_id', 'biz_id', 'ydreferer', 'usp', 'spm', 'utm_source', 'utm_medium'], extra: 'csdn' }],
+      [/(^|\.)(youku|tudou)\.com$/, { params: ['spm', 'scm', 'from', 's', 'playMode', 'client_id'], re: ALI_RE }],
+      [/(^|\.)((alibaba|alibabagroup|aliyun|alimama|aliexpress|taobao|tmall|1688|jiyoujia|fliggy)\.(com|hk|cn)|(lazada|trendyol)\.[a-z.]{2,15})$/,
+        { params: ['spm', 'acm', 'scm', 'scene', 'from', 'pvid', 'pvid2', 'scm2', 'stats_click', 'initiative_id', 'source', 'suggest', 'suggest_query',
+          'iconType', 'traceId', 'relationId', 'union_lens', 'ref', 'ali_trackid', 'ak', 'detailSharePosition', 'topOfferIds', 'sp_abtk',
+          'search_condition', 'industryCatId', 'tbSocialPopKey', 'bxsign', 'utparam', 'eurl', 'itemIds', 'country', 'epid', 'user_number_id',
+          'rootPageId', 'lwfrom', 'disableNav', 'es', 'rand', '_lgt_', 'x5referer', 'status_bar_transparent', 'tracelog', 'ad_id', 'am_id', 'cm_id',
+          'pm_id', '_k', '__pageId__', 'resourceId', 'udsPoolId', 'resultType', 'cms_id', 'pha_html', '__existtitle__', 'object_type',
+          'delivery_pool_id', 'delivery_pool_type', 'ilike_session', 'clickid', 'sessionid', 'cosite', '_p_isad', 'exp', 'hpageId',
+          'shareUniqueId', 'clickTrackInfo', 'data_prefetch', 'at_iframe', 'prefetch_replace', 'wc'], re: ALI_RE }],
+      [/(^|\.)amazon\.[a-z.]{2,15}$/, { params: ['content-id', 'qid', 'crid', 'isAmazonFulfilled', 'sbo', 'plattr', 'sprefix', 'ld', '_encoding', 'ds'],
+        re: AMZN_RE, extra: 'amazon' }],
+      // Fix: "redir_token" is required by youtube.com/redirect links (the
+      // original removed it, breaking external links in descriptions).
+      [/(^|\.)youtube\.com$/, { params: ['embeds_referring_euri', 'embeds_euri', 'source_ve_path', 'feature', 'embeds_referring_origin', 'pp',
+        'ab_channel', 'si'], keep: ['redir_token', 'v', 'list', 't', 'index', 'q', 'event'] }],
+      // Fix: "hl" (language) and "sig" (signed redirect links) are functional.
+      [/(^|\.)google\.[a-z.]{2,15}$|^(about|wellbeing)\.google$/, { params: ['device', 'pcampaignid', 'subid', 'fg', 'ved', 'ei', 'prev', 'sca_esv',
+        'visit_id', 'dest_src'], extra: 'google' }],
+      [/(^|\.)facebook\.com$/, commonPlus(['privacy_mutation_token', 'ars', 'helpref', 'search_session_id', 'entry_point', 'campaign_id', 'nav_source',
+        'placement', 'privacy_source', '__cft__[0]', '__tn__'])],
+      [/(^|\.)(twitter|x)\.com$/, commonPlus(['screen_name'])],
+      [/(^|\.)reddit\.com$/, commonPlus(['embed_host_url', 'actionSource', 'shreddit'], /^(utm_|spm_|from_|ref_|track|trk|experiment_d2x_|experiment_mweb)/)],
+      [/(^|\.)linkedin\.com$/, commonPlus(['original_referer', 'lipi', 'desktopBackground', 'profileFormEntryPoint', 'veh', 'upsellTrk',
+        'upsellTrackingId', 'refId', 'trackingId'])],
+      [/(^|\.)dzen\.ru$/, commonPlus(['rid', 'clid', 'stid', 'issue_tld', 'parent_rid', 'persistent_id', 'utr', 'secdata', 'feed_exp',
+        'force_common_feed', 'feed_filter_type', 'feed_filter_source'])],
+      [/(^|\.)vk\.com$/, commonPlus(['initial_stats_info'])],
+      [/(^|\.)(microsoft|bing|xbox|skype|office|microsoft365)\.com$/, commonPlus(['ocid', 'OCID', 'ICID', 'icid', 'WT.mc_id', 'xr', 'cat0'])],
+      [/(^|\.)msn\.(com|cn)$/, commonPlus(['ocid', 'cvid', 'ei'])],
+      [/(^|\.)bestbuy\.(com|ca)$/, commonPlus(['irgwc', 'mpid', 'irclickid', 'intlreferer', 'cmp', 'icmp', 'ks'], /^(utm_|nrtv_|subId)/)],
+      // Fix: the original's generic "ref" removal broke GitHub ?ref=<branch> links.
+      [/(^|\.)github\.com$/, { params: ['ref_cta', 'ref_loc', 'ref_page'], keep: ['ref'] }],
+      [/(^|\.)stackoverflow\.com$/, commonPlus([], /^(utm_|spm_|from_|track|trk|so_)/)],
+      [/(^|\.)pixiv\.net$/, commonPlus(['provider'])],
+      [/(^|\.)music\.apple\.com$/, commonPlus(['at', 'ct', 'itscg', 'itsct'])],
+      [/(^|\.)zhihu\.com$/, { params: ['search_source', 'hybrid_search_source', 'hybrid_search_extra', 'utm_psn'], extra: 'zhihu' }],
+      [/(^|\.)(163|126|yeah)\.(com|net)$/, commonPlus(['fromDlpro', 'dltype'])],
+      [/(^|\.)weibo\.com$/, commonPlus(['mark_id', '_rand', 'sudaref', 'band_rank'])],
+      [/(^|\.)qq\.com$/, commonPlus(['ADTAG', 'fromSource'])],
+      [/(^|\.)ebay\.[a-z.]{2,15}$/, commonPlus(['_trkparms', '_trksid', 'ssPageName', 'amdata', 'mc', 'hash', 'epid', 'var', '_ssn', 'store_name',
+        'requested', 'itmprp', 'itmmeta'])],
+      [/(^|\.)jd\.com$/, commonPlus(['gx', 'ad_od', 'needRecommendFlag', 'uabt', '_fd', 'pvid', 'jxsid', 'csid', 'ss_projid', 'scan_orig', 'ss_expid',
+        'ss_sexpid', 'ss_ruleid', 'ss_sruleid', 'ss_symbol', 'ss_mtest', 'sceneval'], /^(track|wxa_|spm_|from_)/)],
+      [/(^|\.)yangkeduo\.com$/, commonPlus(['gx', 'ad_od', 'needRecommendFlag', 'uabt', 'pxq_secret_key', 'cpsSignjb_act', 'launch_pdd',
+        'customParameters', 'duoduo_type', 'goods_sign'], /^(track|from_|utm_|_oak_|_wv|_x_)/)],
+      [/(^|\.)(hoyolab|hoyoverse|mihoyo|miyoushe|mihoyogift)\.com$/, { params: ['game_version', 'visit_device', 'device_type', 'plat_type'],
+        re: /^(track|utm|spm_|from_|hyl_|bbs_|mhy_)|_from$/, extra: 'hoyo' }],
+      [/(^|\.)douban\.com$/, commonPlus(['target_user_id', 'dcs', 'dcm', 'dt_time_source'])],
+      [/(^|\.)(imdb|boxofficemojo)\.com$/, { params: ['rf', 'imdbPageAction'], re: AMZN_RE }],
+      [/(^|\.)gitee\.com$/, { params: [], extra: 'gitee' }],
+      [/(^|\.)xda-developers\.com$/, commonPlus(['ascsubtag', 'asc_refurl', 'asc_campaign', 'newsletter_popup'])],
+      [/(^|\.)cctv\.com$/, commonPlus(['toc_style_id'])],
+      [/(^|\.)fiverr\.com$/, commonPlus(['pckg_id', 'funnel', 'context_type', 'context_alg', 'imp_id', 'pos', 'context'])],
+      [/(^|\.)newegg\.com$/, commonPlus(['cm_sp'])],
+      [/(^|\.)theverge\.com$/, commonPlus(['u1', 'ascsubtag', 'subId1', 'subId2', 'subId3'])],
+      [/(^|\.)bluestacks\.com$/, commonPlus(['client_uuid', 'gaCookie', 'gclid', 'clickid', 'msclkid', 'affiliateId', 'offerId', 'transaction_id',
+        'aff_sub', 'first_landing_page', 'download_page_referrer'], /^device_|(_version|utm_campaign)$/)],
+      [/(^|\.)xiaohongshu\.com$/, { params: [], extra: 'xiaohongshu' }],
+      [/(^|\.)nicovideo\.jp$/, commonPlus(['cmnhd_ref'])]
+    ];
+    const site = (SITES.find(([re]) => re.test(host)) || [null, { params: [] }])[1];
+    const siteParams = new Set(site.params || []);
+    const keep = new Set([...(site.keep || []), ...words(cfg.keepParams)]);
+    const extra = new Set(words(cfg.extraParams));
+
+    const drop = (k) => {
+      if (keep.has(k)) return false;
+      if (SAFE.has(k) || SAFE_RE.test(k) || extra.has(k) || siteParams.has(k) || (site.re && site.re.test(k))) return true;
+      return !!cfg.aggressive && (AGGRESSIVE.has(k) || AGGRESSIVE_RE.test(k));
+    };
+
+    // Fix: the original rebuilt URLs with URLSearchParams, which re-encodes
+    // every remaining parameter (GBK searches on Chinese sites came out
+    // garbled; hence its Taobao "q" workaround). Parameters are removed from
+    // the raw query text, leaving the rest byte-for-byte unchanged.
+    function stripQuery(search) {
+      if (!search || search.length < 2) return search;
+      const parts = search.slice(1).split('&');
+      const kept = parts.filter((part) => {
+        if (!part) return false;
+        let k = part.split('=')[0];
+        try { k = decodeURIComponent(k.replace(/\+/g, ' ')); } catch (_) { /* keep raw */ }
+        return !drop(k);
+      });
+      if (kept.length === parts.length) return search;
+      return kept.length ? '?' + kept.join('&') : '';
+    }
+
+    function cleanHref(href) {
+      let u;
+      try { u = new URL(href, location.href); } catch (_) { return null; }
+      if (!/^https?:$/.test(u.protocol) || !/[a-z0-9-]{1,128}\.[a-z]{2,15}$/i.test(u.hostname)) return null;
+      const search = stripQuery(u.search);
+      let path = u.pathname;
+      let hash = u.hash;
+      if (site.extra === 'amazon' && /(^|\.)amazon\./.test(u.hostname)) {
+        const i = path.indexOf('/ref=');
+        if (i > 0) path = path.slice(0, i + 1);
+      }
+      // Fix: the original deleted 8 items at a time while looping, removing
+      // non-tracking parts of the fragment too.
+      if (site.extra === 'google' && /utm_/.test(hash)) {
+        const rest = hash.slice(1).split('&').filter((x) => !/^utm_/.test(x));
+        hash = rest.length ? '#' + rest.join('&') : '';
+      }
+      if (search === u.search && path === u.pathname && hash === u.hash) return null;
+      return u.origin + path + search + hash;
+    }
+
+    function cleanLink(a) {
+      const raw = a.getAttribute('href');
+      if (!raw || raw[0] === '#' || /^(javascript|mailto|tel):/i.test(raw)) return;
+      const out = cleanHref(a.href);
+      if (out) a.setAttribute('href', out);
+      if (site.extra === 'bilibili') {
+        a.removeAttribute('data-spmid');
+        a.removeAttribute('data-mod');
+        const du = a.getAttribute('data-url');
+        if (du && /^(https?:)?\/\//.test(du)) {
+          const cleaned = cleanHref(du.startsWith('//') ? 'https:' + du : du);
+          if (cleaned) { a.href = cleaned; a.classList.remove('jump-link'); }
+        }
+      }
+    }
+
+    // ---- address bar --------------------------------------------------------
+    // Fix: the original replaced history.state with {} (breaking Back on
+    // single-page sites) and also rewrote sign-in/OAuth return URLs.
+    const isAuthPage = () => /^(accounts|login|auth|signin|passport|sso|id)\./.test(host) ||
+      /\/(oauth2?|login|signin|sign-in|authorize|callback|sso|consent)(\/|$)/i.test(location.pathname);
+    function cleanAddressBar() {
+      if (!cfg.cleanAddressBar || isAuthPage()) return;
+      const out = cleanHref(location.href);
+      if (out && out !== location.href) {
+        try { history.replaceState(history.state, '', out); } catch (_) { /* cross-origin edge cases */ }
+      }
+    }
+
+    // ---- link cleaning: batched observer + one tap handler -----------------
+    // Fix: the original attached four listeners to every <div> with a class
+    // and re-cleaned on mouse movement and window.onscroll (overwriting the
+    // site's own handler). Here new links are cleaned once per frame and the
+    // tapped link right before the site sees the tap.
+    const pending = new Set();
+    let queued = false;
+    const flush = () => {
+      queued = false;
+      const nodes = Array.from(pending);
+      pending.clear();
+      for (const n of nodes) {
+        if (!n.isConnected) continue;
+        if (n.tagName === 'A' || n.tagName === 'AREA') cleanLink(n);
+        if (n.querySelectorAll) n.querySelectorAll('a[href], area[href]').forEach(cleanLink);
+      }
+      if (cfg.siteExtras) siteSweep();
+    };
+    const mo = new MutationObserver((muts) => {
+      for (const m of muts) {
+        if (m.type === 'attributes') pending.add(m.target);
+        else for (const n of m.addedNodes) if (n.nodeType === 1) pending.add(n);
+      }
+      if (pending.size && !queued) { queued = true; if (document.hidden) setTimeout(flush, 200); else requestAnimationFrame(flush); }
+    });
+    const startObserver = () => mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'data-url'] });
+    if (document.documentElement) startObserver(); else api.onReady(startObserver);
+
+    const onTap = (e) => {
+      const t = e.target && (e.target.nodeType === 3 ? e.target.parentElement : e.target);
+      const a = t && t.closest && t.closest('a[href], area[href]');
+      if (a) cleanLink(a);
+    };
+    for (const ev of ['touchstart', 'pointerdown', 'mousedown', 'click', 'auxclick', 'contextmenu', 'keydown']) {
+      window.addEventListener(ev, onTap, { capture: true, passive: true });
+    }
+
+    const fullClean = () => {
+      cleanAddressBar();
+      document.querySelectorAll('a[href], area[href]').forEach(cleanLink);
+      if (cfg.siteExtras) siteSweep();
+    };
+    cleanAddressBar();
+    api.onReady(fullClean);
+    api.onLoad(() => setTimeout(fullClean, 1000));
+    api.onUrlChange(() => setTimeout(fullClean, 300));
+    // Manual clean: Alt+Shift+X (iPad keyboards), as in the original.
+    window.addEventListener('keydown', (e) => { if (e.altKey && e.shiftKey && (e.key === 'X' || e.key === 'x')) { fullClean(); api.toast('Links cleaned'); } });
+
+    // ---- site extras --------------------------------------------------------
+    const css = {
+      bilibili: '#right-bottom-banner, #anchor-guest-box-id, iframe[src*="live-lottery"] { display: none !important; }',
+      hoyo: 'body { overflow: auto !important; }',
+      baidu: location.pathname === '/s' ? '.EC_result { display: none !important; }' : ''
+    };
+    if (cfg.siteExtras && css[site.extra]) api.addStyle(css[site.extra], 'ioss-clean-urls-css');
+
+    const closeOnce = (modal, close, ms) => {
+      const end = Date.now() + ms;
+      const stop = api.observe(document.documentElement, { childList: true, subtree: true }, () => {
+        if (Date.now() > end) return stop();
+        const m = document.querySelector(modal);
+        const b = m && (m.querySelector(close) || document.querySelector(close));
+        if (b) { b.click(); stop(); }
+      }, { throttle: 100 });
+      setTimeout(stop, ms);
+    };
+    if (cfg.siteExtras && site.extra === 'zhihu') api.onReady(() => closeOnce('.Modal-content', '.Modal-closeButton', 4000));
+    if (cfg.siteExtras && site.extra === 'xiaohongshu') api.onReady(() => closeOnce('.login-container', '.close-button', 4000));
+    if (cfg.siteExtras && site.extra === 'gitee') {
+      const stop = api.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] }, () => {
+        const m = document.querySelector('.menu.transition.visible');
+        if (m) m.style.setProperty('display', 'none', 'important');
+      }, { throttle: 50 });
+      api.onReady(() => setTimeout(stop, 3000));
+    }
+    if (cfg.siteExtras && site.extra === 'csdn') {
+      // As in the original: CSDN's click trackers never see link taps; the
+      // browser still follows the link normally.
+      window.addEventListener('click', (e) => {
+        const a = e.target && e.target.closest && e.target.closest('a[href]');
+        if (a && a.hostname && !/^javascript:/i.test(a.getAttribute('href'))) e.stopImmediatePropagation();
+      }, true);
+    }
+
+    function siteSweep() {
+      if (site.extra === 'bilibili') {
+        document.querySelectorAll('meta[name="spm_prefix"]').forEach((m) => m.remove());
+        // Fix: the original crashed when a card had no data-report or the
+        // banner was missing, and its live pop-up timer never ran.
+        document.querySelectorAll('a[href*="cm.bilibili.com"]').forEach((a) => a.remove());
+        document.querySelectorAll('.bili-video-card[data-report*="tianma."]').forEach((c) => c.setAttribute('data-report', '0'));
+        const entry = document.querySelector('.right-entry-item');
+        if (entry && entry.innerText.includes('登录') && !document.getElementById('ioss-bili-login-css')) {
+          api.addStyle('.lt-row, .bili-login-card, .bili-mini-mask, .unlogin-popover { display: none !important; }', 'ioss-bili-login-css');
+        }
+      } else if (site.extra === 'baidu') {
+        if (location.pathname === '/s') document.querySelectorAll('.EC_result').forEach((n) => n.remove());
+        document.querySelectorAll('a[href*="zhidao.baidu.com/q"]').forEach((a) => { if (a.pathname === '/q') a.pathname = '/search'; });
+      }
+    }
   }
 }));
 
