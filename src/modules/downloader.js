@@ -1,7 +1,7 @@
 ({
   id: 'downloader',
   name: 'Video downloader',
-  version: '1.3.0',
+  version: '1.4.0',
   api: 1,
   source: 'All-in-One Video Downloader 1.0.19 (Daniel)',
   description: 'Adds a download button for videos on YouTube, YouTube Music, TikTok, Instagram, X/Twitter, Threads, Facebook, Pinterest, Snapchat, TED, Douyin, Xiaohongshu and Spotify. Tapping it downloads the video and offers "Save Video" (camera roll) in the iPhone share sheet; YouTube saves up to 360p this way. Where a site does not allow that, or in website mode, it opens the downloader service instead.',
@@ -413,15 +413,32 @@
     // layout no longer sets where we looked, so it rendered dark-on-dark and
     // was practically invisible. It now copies the like button's own colour,
     // background and height (icon-only in the new layout, a pill in the old).
+    // In the Aero look the button is a glossy blue orb/pill of its own and
+    // only takes its shape and height from the like button. The like button
+    // is measured once per button (and again if YouTube swaps it), not on
+    // every page change.
+    const glossy = api.aeroCss ? api.aeroCss('.ioss-yt-dl') : '';
+    const matched = new WeakMap();
     function matchNative(btn, like) {
       const native = like.querySelector('button') || like;
+      const seen = matched.get(btn);
+      if (seen && seen.native === native && Date.now() - seen.at < 5000) return;
       const st = getComputedStyle(native);
       const iconOnly = /^(transparent|rgba\(0, 0, 0, 0\))$/.test(st.backgroundColor);
       btn.classList.toggle('ioss-yt-dl-icon', iconOnly);
-      btn.style.setProperty('color', st.color, 'important');
-      btn.style.setProperty('background', iconOnly ? 'transparent' : st.backgroundColor, 'important');
+      if (!glossy) {
+        btn.style.setProperty('color', st.color, 'important');
+        btn.style.setProperty('background', iconOnly ? 'transparent' : st.backgroundColor, 'important');
+      }
       const h = Math.round(native.getBoundingClientRect().height);
-      if (h >= 28 && h <= 64) btn.style.setProperty('height', h + 'px', 'important');
+      if (h >= 28 && h <= 64) {
+        // The orb is capped at 44pt (Apple's tap size) so its rim and glow
+        // do not touch the neighbouring 48pt icon buttons.
+        const size = glossy && iconOnly ? Math.min(h, 44) : h;
+        btn.style.setProperty('height', size + 'px', 'important');
+        if (glossy && iconOnly) btn.style.setProperty('width', size + 'px', 'important');
+        matched.set(btn, { native, at: Date.now() });
+      }
     }
     if (cfg.ytInline && /(^|\.)(m|www)\.youtube\.com$/.test(host)) {
       api.addStyle(`
@@ -434,7 +451,7 @@
         .ioss-yt-dl svg { width: 22px; height: 22px; pointer-events: none; }
         .ioss-yt-dl.ioss-yt-dl-icon { padding: 0; width: 44px; margin: 0 2px; border-radius: 50%; }
         .ioss-yt-dl.ioss-yt-dl-icon svg { width: 24px; height: 24px; }
-      `, 'ioss-yt-dl-css');
+      ` + glossy + (glossy ? '.ioss-yt-dl.ioss-yt-dl-icon { margin: 0 5px !important; } .ioss-yt-dl.ioss-yt-dl-icon svg { width: 22px; height: 22px; }' : ''), 'ioss-yt-dl-css');
       inlineYouTube();
       api.observe(document.body, { childList: true, subtree: true }, inlineYouTube, { throttle: 400 });
       api.onUrlChange(() => setTimeout(inlineYouTube, 300));
@@ -469,7 +486,8 @@
     if (/(^|\.)(x|twitter)\.com$/.test(host)) {
       const SVG = 'M11.99 16l-5.7-5.7L7.7 8.88l3.29 3.3V2.59h2v9.59l3.3-3.3 1.41 1.42-5.71 5.7zM21 15l-.02 3.51c0 1.38-1.12 2.49-2.5 2.49H5.5C4.11 21 3 19.88 3 18.5V15h2v3.5c0 .28.22.5.5.5h12.98c.28 0 .5-.22.5-.5L19 15h2z';
       api.addStyle(`.ioss-x-dl{display:flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;margin-left:4px;color:rgb(113,118,123);border:0;background:none;padding:0;-webkit-tap-highlight-color:transparent}
-        .ioss-x-dl:active{color:rgb(29,155,240)} .ioss-x-dl svg{width:20px;height:20px}`);
+        .ioss-x-dl:active{color:rgb(29,155,240)} .ioss-x-dl svg{width:20px;height:20px}` +
+        (api.aeroCss && api.aeroCss('.ioss-x-dl') ? api.aeroCss('.ioss-x-dl') + '.ioss-x-dl{min-width:34px;min-height:34px;width:34px;height:34px;border-radius:50%!important;align-self:center} .ioss-x-dl svg{width:18px;height:18px}' : ''));
       const scan = () => {
         for (const art of document.querySelectorAll('article:not([data-ioss-dl])')) {
           const media = art.querySelector('[data-testid="videoComponent"], [data-testid="videoPlayer"], button[data-testid="playButton"], div[role="progressbar"]');

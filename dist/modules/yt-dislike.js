@@ -1,7 +1,7 @@
 ({
   id: 'yt-dislike',
   name: 'Return YouTube Dislike',
-  version: '3.2.3',
+  version: '3.2.4',
   api: 1,
   source: 'Return YouTube Dislike 3.2.0-ios (Anarios & JRWR)',
   description: 'Shows dislike counts again (watch pages and Shorts, mobile and desktop) using the returnyoutubedislike.com API, and anonymously contributes your own likes/dislikes.',
@@ -2931,8 +2931,8 @@ function writeMobileDislikes() {
       return;
     }
     const target = dislikeButton.querySelector(".button-renderer-text") ?? getDislikeTextContainer();
-    if (target && target.innerText !== String(mobileDislikes)) {
-      target.innerText = mobileDislikes;
+    if (target && target.textContent !== String(mobileDislikes)) {
+      target.textContent = mobileDislikes;
     }
   } catch (error) {
     cLog("Mobile dislike update failed", error instanceof Error ? error.message : String(error));

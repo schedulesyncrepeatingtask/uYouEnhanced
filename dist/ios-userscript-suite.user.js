@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iOS Userscript Suite
 // @namespace    https://github.com/schedulesyncrepeatingtask/uYouEnhanced
-// @version      1.5.0
+// @version      1.6.0
 // @description  All-in-one Safari suite tuned for iPhone 13 mini: YouTube ad skipping, SponsorBlock, dislikes, Picture-in-Picture, video downloader, Google anti-tracking and cookie-banner rejection, Reddit login-wall removal and shortlink bypassing. Every module updates itself.
 // @author       iOS Userscript Suite contributors (see README for the original authors)
 // @license      AGPL-3.0-or-later
@@ -49,7 +49,7 @@
    * modules without waiting for a full userscript update.
    * ==================================================================== */
 
-  const SUITE = {"name":"iOS Userscript Suite","version":"1.5.0","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
+  const SUITE = {"name":"iOS Userscript Suite","version":"1.6.0","api":1,"repo":"schedulesyncrepeatingtask/uYouEnhanced","branch":"main","file":"ios-userscript-suite"};
   const RAW = `https://raw.githubusercontent.com/${SUITE.repo}/${SUITE.branch}/dist/`;
   const STATE_KEY = 'ioss:state';
   const CODE_KEY = (id) => `ioss:code:${id}`;
@@ -143,11 +143,41 @@
   // MutationObserver whose callback runs at most once per frame (or after a
   // debounce) instead of once per mutation batch. YouTube/Google mutate the
   // DOM hundreds of times per second; this keeps the phone cool.
+  //
+  // Modules that watch the same node with the same options share ONE
+  // MutationObserver (on YouTube several modules watch <body>): the browser
+  // then builds one list of mutation records instead of one per module.
+  const hubs = new WeakMap(); // node -> Map(optionsKey -> { mo, subs })
+  let observerCount = 0; // live shared observers (shown with debug logging on)
+  const hubKey = (o) => JSON.stringify(Object.keys(o).sort().map((k) => [k, Array.isArray(o[k]) ? o[k].slice().sort() : o[k]]));
+  function joinHub(node, options, notify) {
+    let byKey = hubs.get(node);
+    if (!byKey) hubs.set(node, (byKey = new Map()));
+    const key = hubKey(options);
+    let hub = byKey.get(key);
+    if (!hub) {
+      hub = { subs: new Set(), mo: null, leave: null };
+      hub.mo = new MutationObserver(() => { for (const fn of hub.subs) fn(); });
+      hub.mo.observe(node, options);
+      byKey.set(key, hub);
+      observerCount++;
+      hub.leave = (fn) => {
+        if (!hub.subs.delete(fn) || hub.subs.size) return;
+        hub.mo.disconnect();
+        byKey.delete(key);
+        observerCount--;
+      };
+    }
+    hub.subs.add(notify);
+    return hub;
+  }
   function observe(target, options, callback, { debounce = 0, throttle = 0 } = {}) {
     let scheduled = false;
     let timer = 0;
-    const run = () => { scheduled = false; safe('observer', callback); };
-    const mo = new MutationObserver(() => {
+    let stopped = false;
+    let hub = null;
+    const run = () => { scheduled = false; if (!stopped) safe('observer', callback); };
+    const notify = () => {
       if (debounce) {
         clearTimeout(timer);
         timer = setTimeout(run, debounce);
@@ -156,17 +186,24 @@
       if (scheduled) return;
       scheduled = true;
       if (throttle) timer = setTimeout(run, throttle);
-      else if (document.hidden) setTimeout(run, 250);
+      else if (document.hidden) timer = setTimeout(run, 250);
       else requestAnimationFrame(run);
-    });
+    };
     const start = () => {
+      if (stopped) return;
       const t = typeof target === 'function' ? target() : target;
-      if (t) mo.observe(t, options);
+      if (!t) return;
+      hub = joinHub(t, options, notify);
     };
     if (typeof target === 'function' || target) {
       if (!document.documentElement) whenRoot(start); else start();
     }
-    return () => { mo.disconnect(); clearTimeout(timer); };
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      clearTimeout(timer);
+      if (hub) { hub.leave(notify); hub = null; }
+    };
   }
 
   function waitFor(selector, { timeout = 15000, root = document } = {}) {
@@ -199,13 +236,22 @@
       // Content scripts cannot see the page's history.pushState calls, so we
       // combine cheap polling (only while visible) with the SPA events that
       // YouTube & co. dispatch on the shared DOM.
-      urlPoll = every(400, checkUrl);
+      // Where the Navigation API exists it reports every pushState and
+      // replaceState, so the timer only remains as a slow safety net.
+      let navApi = false;
+      try {
+        if (window.navigation && typeof window.navigation.addEventListener === 'function') {
+          window.navigation.addEventListener('currententrychange', () => setTimeout(checkUrl, 0));
+          window.navigation.addEventListener('navigatesuccess', checkUrl);
+          navApi = true;
+        }
+      } catch (_) { /* optional */ }
+      urlPoll = every(navApi ? 1200 : 400, checkUrl);
       window.addEventListener('popstate', checkUrl, true);
       window.addEventListener('hashchange', checkUrl, true);
       for (const ev of ['yt-navigate-finish', 'state-navigateend', 'yt-page-data-updated', 'spfdone']) {
         document.addEventListener(ev, () => setTimeout(checkUrl, 0), true);
       }
-      try { window.navigation && window.navigation.addEventListener('navigatesuccess', checkUrl); } catch (_) { /* optional */ }
     }
     return () => urlListeners.delete(fn);
   }
@@ -421,7 +467,148 @@
     .foot { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .note { color: var(--mut); font-size: 12px; margin-top: 10px; }
     .banner { background: rgba(10,132,255,.14); border-radius: 10px; padding: 10px 12px; margin: 8px 0; font-size: 14px; }
+    .orb { display: none; }
+    .pill { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 9px; font-size: 11px; font-weight: 600; line-height: 16px;
+      background: rgba(52,199,89,.2); color: #1a8f3c; vertical-align: 1px; }
+    @keyframes rise { from { transform: translateY(36px); opacity: 0; } }
+    @keyframes fade { from { opacity: 0; } }
+    @media (prefers-reduced-motion: no-preference) {
+      .backdrop { animation: fade .2s ease-out; }
+      @media (max-width: 619px) { .sheet { animation: rise .26s cubic-bezier(.2,.8,.2,1); } }
+    }
   `;
+
+  // The "Aero" look: glass panels, glossy buttons, sky blue and fresh green
+  // (the Frutiger Aero style of the late 2000s). Layered on top of the plain
+  // rules above, so "Plain" in the settings simply leaves this class off.
+  const AERO_CSS = `
+    .aero { --bg:#e6f5ff; --fg:#0c2c4d; --mut:#4a6a89; --line:rgba(20,95,170,.2); --acc:#0b7fe0; --card:rgba(255,255,255,.6);
+      --rim:rgba(10,90,170,.5); --glow:rgba(0,90,190,.3); --head:#0a4f9e;
+      --aqua:linear-gradient(180deg,#9be6ff 0%,#41b9f7 46%,#0f86e8 54%,#4bcbf9 100%);
+      --leaf:linear-gradient(180deg,#d2f88a 0%,#86d632 46%,#43aa15 54%,#93e350 100%);
+      --silver:linear-gradient(180deg,#fff 0%,#eef7fd 46%,#d3e6f4 54%,#f3faff 100%);
+      --shine:linear-gradient(180deg,rgba(255,255,255,.85),rgba(255,255,255,.12));
+      font-family: "Frutiger", "Frutiger Linotype", "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui, sans-serif; }
+    @media (prefers-color-scheme: dark) { .aero { --bg:#06203f; --fg:#eaf6ff; --mut:#a3c8ea; --line:rgba(150,210,255,.22); --acc:#6fd0ff;
+      --card:rgba(130,195,255,.12); --rim:rgba(150,215,255,.45); --glow:rgba(0,0,0,.45); --head:#eaf6ff;
+      --silver:linear-gradient(180deg,#6388af 0%,#3d638c 46%,#23456d 54%,#4874a0 100%); } }
+
+    /* glossy buttons: a gradient body, a bright rim and a highlight on the top half */
+    .aero .btn, .aero .fab, .aero .toast button { position: relative; overflow: hidden; isolation: isolate; border: 1px solid var(--rim);
+      background: var(--silver); color: var(--fg);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.9), inset 0 -7px 9px -6px rgba(255,255,255,.6), 0 2px 7px var(--glow); }
+    .aero .btn::before, .aero .fab::before, .aero .toast button::before, .aero .dot i::before, .aero .orb::before { content: ""; position: absolute;
+      z-index: -1; left: 3px; right: 3px; top: 1px; height: 46%; border-radius: inherit; background: var(--shine); opacity: .8; pointer-events: none; }
+    .aero .btn { border-radius: 22px; padding: 0 18px; }
+    .aero .btn.primary { background: var(--aqua); color: #fff; text-shadow: 0 -1px 0 rgba(0,55,120,.55); border-color: rgba(8,84,170,.7); }
+    .aero .btn:active, .aero .toast button:active, .aero .more:active { filter: brightness(.9); }
+
+    /* orbs: floating buttons, the settings dot and the logo in the title bar */
+    .aero .fab, .aero .dot i, .aero .orb { border-radius: 50%; border: 1px solid rgba(255,255,255,.8); color: #fff;
+      background: radial-gradient(circle at 50% 118%, #9af6ff 0%, rgba(154,246,255,0) 58%), var(--aqua);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,.9), 0 0 0 1px rgba(0,80,170,.55), 0 4px 12px rgba(0,70,170,.5);
+      -webkit-backdrop-filter: none; backdrop-filter: none; }
+    .aero .fab::before, .aero .dot i::before, .aero .orb::before { left: 13%; right: 13%; top: 5%; height: 43%; border-radius: 50%; opacity: .9; }
+    .aero .dot i, .aero .orb { position: relative; overflow: hidden; isolation: isolate; }
+    .aero .fab svg, .aero .dot svg, .aero .orb svg { filter: drop-shadow(0 1px 1px rgba(0,50,120,.7)); }
+    .aero .fab:active { filter: brightness(1.15); }
+    .aero .dot.idle { opacity: .42; }
+    .aero .orb { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; flex: none; }
+    .aero .orb svg { width: 17px; height: 17px; }
+
+    /* messages */
+    .aero .toast { position: relative; overflow: hidden; isolation: isolate; border-radius: 16px; border: 1px solid rgba(170,228,255,.65);
+      background: linear-gradient(180deg, rgba(34,128,214,.92), rgba(6,58,128,.94)); text-shadow: 0 1px 1px rgba(0,30,80,.6);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 8px 26px rgba(0,50,130,.45); }
+    .aero .toast::before { content: ""; position: absolute; z-index: -1; left: 0; right: 0; top: 0; height: 50%; pointer-events: none;
+      background: linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,.04)); }
+    .aero .toast button { border-radius: 16px; padding: 0 14px; background: var(--leaf); color: #fff; border-color: rgba(40,110,10,.65);
+      text-shadow: 0 -1px 0 rgba(20,80,0,.55); }
+
+    /* settings sheet: a glass panel with a sky-and-leaf glow and a title bar */
+    .aero .backdrop { background: rgba(4,44,96,.42); }
+    .aero .sheet { border-radius: 22px 22px 0 0; border-top: 1px solid rgba(255,255,255,.95);
+      background: radial-gradient(70% 34% at 100% 0%, rgba(150,236,150,.5), transparent 70%),
+        radial-gradient(90% 40% at 0% 0%, rgba(110,210,255,.8), transparent 72%),
+        linear-gradient(180deg, rgba(236,248,255,.96), rgba(205,232,251,.96));
+      -webkit-backdrop-filter: blur(22px) saturate(1.6); backdrop-filter: blur(22px) saturate(1.6);
+      box-shadow: 0 -12px 44px rgba(0,60,140,.4), inset 0 1px 0 #fff; }
+    .aero .grab { position: relative; z-index: 2; background: rgba(255,255,255,.95); box-shadow: 0 1px 2px rgba(0,60,130,.35); }
+    /* the title bar reaches up behind the grab handle to the top edge */
+    .aero .head { margin: -23px -16px 0; padding: 31px 16px 10px; top: -29px; gap: 10px; border-bottom: 1px solid rgba(255,255,255,.85);
+      box-shadow: 0 1px 0 rgba(20,95,170,.16), 0 6px 14px -8px rgba(0,70,150,.35);
+      background:
+        radial-gradient(circle at 67.4% calc(100% - 43px), rgba(255,255,255,.95) 0 1.5px, transparent 2px),
+        radial-gradient(circle at 69% calc(100% - 37px), transparent 0 8px, rgba(255,255,255,.75) 8.5px 9.5px, transparent 10px),
+        radial-gradient(circle at 51.2% calc(100% - 12px), rgba(255,255,255,.9) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 52% calc(100% - 9px), transparent 0 4.5px, rgba(255,255,255,.7) 5px 5.8px, transparent 6.3px),
+        radial-gradient(circle at 73% calc(100% - 9px), transparent 0 3px, rgba(255,255,255,.65) 3.5px 4.2px, transparent 4.7px),
+        linear-gradient(180deg, rgba(150,220,255,.94), rgba(214,240,255,.9));
+      -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+    .aero .head h2 { color: var(--head); text-shadow: 0 1px 0 rgba(255,255,255,.9); letter-spacing: -.2px; }
+    .aero .card { border-radius: 16px; border: 1px solid rgba(255,255,255,.95);
+      background: linear-gradient(180deg, rgba(255,255,255,.88), rgba(255,255,255,.52));
+      box-shadow: 0 2px 9px rgba(0,70,150,.16), inset 0 1px 0 #fff; }
+    .aero .banner { border-radius: 14px; border: 1px solid rgba(255,255,255,.85); box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+      background: linear-gradient(180deg, rgba(120,210,255,.5), rgba(60,170,245,.26)); }
+    .aero .pill { background: var(--leaf); color: #fff; border: 1px solid rgba(40,110,10,.5); text-shadow: 0 -1px 0 rgba(20,80,0,.5);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.7); }
+    /* "Options": a 30pt glass chip inside a 44pt tap target */
+    .aero .more { border: 7px solid transparent; border-radius: 22px; padding: 0 11px; font-weight: 600; font-size: 13px;
+      background: var(--silver) padding-box; box-shadow: inset 0 0 0 1px var(--rim), inset 0 2px 0 rgba(255,255,255,.85); }
+    .aero input[type=number], .aero input[type=text], .aero select { border: 1px solid var(--rim); border-radius: 10px;
+      background: rgba(255,255,255,.78); box-shadow: inset 0 2px 3px rgba(0,50,110,.18); }
+    .aero input.sw { border: 1px solid rgba(10,80,150,.38); background: linear-gradient(180deg, #aebfd0, #e4edf5);
+      box-shadow: inset 0 2px 4px rgba(0,40,90,.35); }
+    .aero input.sw::after { top: 1px; left: 1px; background: radial-gradient(circle at 36% 28%, #fff 0 28%, #e6eff7 58%, #b7c9db 100%);
+      box-shadow: 0 1px 3px rgba(0,40,90,.45), inset 0 -1px 1px rgba(0,60,120,.2); }
+    .aero input.sw:checked { background: var(--leaf); border-color: rgba(40,110,10,.6);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.55), inset 0 -8px 8px -6px rgba(255,255,255,.55), 0 0 8px rgba(120,220,60,.55); }
+    @media (prefers-color-scheme: dark) {
+      .aero .sheet { border-top-color: rgba(170,225,255,.55);
+        background: radial-gradient(70% 34% at 100% 0%, rgba(70,200,140,.28), transparent 70%),
+          radial-gradient(90% 40% at 0% 0%, rgba(40,150,255,.5), transparent 72%),
+          linear-gradient(180deg, rgba(8,40,80,.95), rgba(4,22,48,.96));
+        box-shadow: 0 -12px 44px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.3); }
+      .aero .grab { background: rgba(200,235,255,.55); box-shadow: none; }
+      .aero .head { border-bottom-color: rgba(160,220,255,.3); box-shadow: 0 6px 14px -8px rgba(0,0,0,.6);
+        background:
+          radial-gradient(circle at 67.4% calc(100% - 43px), rgba(255,255,255,.8) 0 1.5px, transparent 2px),
+          radial-gradient(circle at 69% calc(100% - 37px), transparent 0 8px, rgba(190,235,255,.5) 8.5px 9.5px, transparent 10px),
+          radial-gradient(circle at 51.2% calc(100% - 12px), rgba(255,255,255,.7) 0 1px, transparent 1.5px),
+          radial-gradient(circle at 52% calc(100% - 9px), transparent 0 4.5px, rgba(190,235,255,.45) 5px 5.8px, transparent 6.3px),
+          radial-gradient(circle at 73% calc(100% - 9px), transparent 0 3px, rgba(190,235,255,.4) 3.5px 4.2px, transparent 4.7px),
+          linear-gradient(180deg, rgba(22,96,176,.94), rgba(9,48,98,.92)); }
+      .aero .head h2 { text-shadow: 0 1px 2px rgba(0,20,60,.8); }
+      .aero .card { border-color: rgba(165,220,255,.3); background: linear-gradient(180deg, rgba(150,210,255,.18), rgba(90,160,235,.07));
+        box-shadow: 0 2px 10px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.2); }
+      .aero .btn::before { opacity: .35; }
+      .aero .btn.primary::before { opacity: .8; }
+      .aero .banner { border-color: rgba(165,220,255,.35); box-shadow: inset 0 1px 0 rgba(255,255,255,.2);
+        background: linear-gradient(180deg, rgba(60,160,245,.4), rgba(20,90,180,.25)); }
+      .aero .more { box-shadow: inset 0 0 0 1px var(--rim), inset 0 2px 0 rgba(255,255,255,.25); color: #fff; }
+      .aero input[type=number], .aero input[type=text], .aero select { background: rgba(0,20,50,.5); box-shadow: inset 0 2px 3px rgba(0,0,0,.4); }
+      .aero input.sw { border-color: rgba(150,215,255,.35); background: linear-gradient(180deg, #0c2848, #2a4f79); }
+    }
+  `;
+
+  const useAero = () => (state ? state.core : DEFAULT_CORE).look !== 'plain';
+
+  // The same gloss for buttons that modules put into the page itself (the
+  // YouTube download and Picture-in-Picture buttons). Returns '' in the plain
+  // look, so a module can tell which style is in use.
+  function aeroCss(selector) {
+    if (!useAero()) return '';
+    return `
+      ${selector} { position: relative !important; overflow: hidden !important; isolation: isolate !important; color: #fff !important;
+        border: 1px solid rgba(255,255,255,.75) !important;
+        background: linear-gradient(180deg,#9be6ff 0%,#41b9f7 46%,#0f86e8 54%,#4bcbf9 100%) !important;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.9), inset 0 -7px 9px -6px rgba(255,255,255,.6), 0 0 0 1px rgba(0,80,170,.45), 0 2px 7px rgba(0,70,170,.4) !important; }
+      ${selector}::before { content: ""; position: absolute; z-index: -1; left: 8%; right: 8%; top: 3%; height: 45%; border-radius: 999px;
+        background: linear-gradient(180deg, rgba(255,255,255,.85), rgba(255,255,255,.12)); pointer-events: none; }
+      ${selector} svg { filter: drop-shadow(0 1px 1px rgba(0,50,120,.7)) !important; }
+      ${selector}:active { filter: brightness(.9) !important; opacity: 1 !important; }`;
+  }
 
   let uiRoot = null;
   function ui() {
@@ -433,8 +620,8 @@
     // children, so it has to cover the viewport for them to stay in place.
     host.style.cssText = 'position: fixed !important; inset: 0 !important; width: auto !important; height: auto !important; margin: 0 !important; padding: 0 !important; border: 0 !important; background: none !important; display: block !important; pointer-events: none !important; z-index: 2147483647 !important; transform: none !important; opacity: 1 !important; visibility: visible !important;';
     const shadow = host.attachShadow({ mode: 'open' });
-    shadow.appendChild(el('style', { text: UI_CSS }));
-    const wrap = el('div', { class: 'wrap' }, [el('div', { class: 'toasts' }), el('div', { class: 'fabs' })]);
+    shadow.appendChild(el('style', { text: UI_CSS + AERO_CSS }));
+    const wrap = el('div', { class: useAero() ? 'wrap aero' : 'wrap' }, [el('div', { class: 'toasts' }), el('div', { class: 'fabs' })]);
     shadow.appendChild(wrap);
     (document.body || document.documentElement).appendChild(host);
     uiRoot = { host, shadow, wrap, toasts: wrap.querySelector('.toasts'), fabs: wrap.querySelector('.fabs') };
@@ -567,6 +754,7 @@
     notifyUpdates: true,
     dot: true,
     dotPos: null,
+    look: 'aero',
     fabSide: 'right',
     fabBottom: 76,
     debug: false,
@@ -654,7 +842,7 @@
       log: (...a) => { if (state.core.debug) console.log(tag, ...a); },
       warn: (...a) => console.warn(tag, ...a),
       el, icon, addStyle, onReady, onLoad, onUrlChange, every, observe, waitFor,
-      request, toast, fab, pageRun, openTab, copy, menu, isGoogleHost, sha256,
+      request, toast, fab, pageRun, openTab, copy, menu, isGoogleHost, sha256, aeroCss,
       storage: {
         get: (k, d) => storage.get(`ioss:${def.id}:${k}`, d),
         set: (k, v) => storage.set(`ioss:${def.id}:${k}`, v),
@@ -662,6 +850,13 @@
       },
       openSettings: () => openPanel(def.id)
     };
+  }
+
+  // Would this module run here? (enabled, allowed in frames, URL matches)
+  function wantsPage(def, url) {
+    const ms = moduleState(def);
+    if (!ms.enabled || (!isTop && !def.frames)) return false;
+    try { return !!def.match(url); } catch (_) { return false; }
   }
 
   function runModule(entry, url) {
@@ -761,7 +956,12 @@
     const id = `o-${def.id}-${opt.key}`;
     const val = mstate.settings[opt.key];
     let input;
-    const commit = (v) => { mstate.settings[opt.key] = v; saveState(); markDirty(); };
+    const commit = (v) => {
+      mstate.settings[opt.key] = v;
+      saveState();
+      markDirty();
+      if (def.id === 'core' && uiRoot) { uiRoot.wrap.classList.toggle('aero', useAero()); positionFabs(); }
+    };
     if (opt.type === 'bool') {
       input = el('input', { id, type: 'checkbox', class: 'sw', checked: !!val, onchange: (e) => commit(e.target.checked) });
     } else if (opt.type === 'number') {
@@ -787,13 +987,20 @@
 
   function openPanel(focusId) {
     if (!isTop) return;
-    whenBody(() => {
+    whenBody(async () => {
+      // Modules that did not run here were not looked up yet (see boot).
+      for (const [id, e] of active) {
+        if (!e.lazy) continue;
+        const r = await resolveModule(BUNDLED.find((b) => b.id === id));
+        active.set(id, Object.assign(r, { matched: false }));
+      }
       closePanel();
       const { wrap } = ui();
       const backdrop = el('div', { class: 'backdrop', onclick: closePanel });
       const sheet = el('div', { class: 'sheet', role: 'dialog', 'aria-label': `${SUITE.name} settings` });
       sheet.appendChild(el('div', { class: 'grab' }));
       sheet.appendChild(el('div', { class: 'head' }, [
+        el('span', { class: 'orb' }, [icon(GEAR_PATH, 17)]),
         el('h2', { text: SUITE.name }),
         el('button', { class: 'btn', type: 'button', text: 'Done', onclick: closePanel })
       ]));
@@ -823,7 +1030,8 @@
           el('div', { class: 'mod' }, [
             el('div', { class: 't' }, [
               el('div', { class: 'n', text: def.name || def.id }),
-              el('div', { class: 'v', text: `v${def.version}${entry.source === 'updated' ? ' (hot-updated)' : ''}${entry.matched ? ' · on this page' : ''}` }),
+              el('div', { class: 'v' }, [`v${def.version}${entry.source === 'updated' ? ' (hot-updated)' : ''}`,
+                entry.matched ? el('span', { class: 'pill', text: 'on this page' }) : null]),
               entry.error ? el('div', { class: 'err', text: `Error: ${entry.error}` }) : null
             ]),
             more,
@@ -840,6 +1048,8 @@
           { key: 'autoUpdate', type: 'bool', label: 'Check for module updates automatically' },
           { key: 'intervalHours', type: 'number', label: 'Check every (hours)', min: 1, max: 168 },
           { key: 'notifyUpdates', type: 'bool', label: 'Show update messages' },
+          { key: 'look', type: 'select', label: 'Look', choices: [['aero', 'Aero'], ['plain', 'Plain']],
+            help: 'Aero: glossy glass. Buttons inside pages change after a reload.' },
           { key: 'dot', type: 'bool', label: 'Settings dot on every page', help: 'Drag it anywhere; it fades when idle. Without it, add #suite to an address.' },
           { key: 'fabSide', type: 'select', label: 'Floating buttons side', choices: [['right', 'Right'], ['left', 'Left']] },
           { key: 'fabBottom', type: 'number', label: 'Floating buttons height (px from bottom)', min: 0, max: 600 },
@@ -909,9 +1119,13 @@
     }
 
     state = await loadState();
-    const entries = await Promise.all(BUNDLED.map(resolveModule));
+    // Hot-updated copies are read from storage and compiled only for the
+    // modules that will actually run on this page (the rest wait until the
+    // settings sheet is opened).
+    const entries = await Promise.all(BUNDLED.map((b) => (wantsPage(b, url) ? resolveModule(b) : { def: b, source: 'bundled', lazy: true })));
     for (const e of entries) active.set(e.def.id, e);
-    for (const e of entries) runModule(e, url);
+    for (const e of entries) if (!e.lazy) runModule(e, url);
+    if (state.core.debug) console.log('[iOS Suite]', entries.filter((e) => !e.lazy).length, 'of', entries.length, 'modules on this page');
     if (!isTop) return;
 
     menu('⚙️ iOS Suite settings', () => openPanel());
@@ -1769,11 +1983,11 @@
   }
 }));
 
-  /* ---- module: yt-adblock v6.22.0 ---- */
+  /* ---- module: yt-adblock v6.23.0 ---- */
   register(({
   id: 'yt-adblock',
   name: 'YouTube: remove ads',
-  version: '6.22.0',
+  version: '6.23.0',
   api: 1,
   source: 'youtube-adb 6.21 (iamfugui)',
   description: 'Hides banner/feed/search ads on YouTube (mobile and desktop), skips or fast-forwards video ads and removes the "ad blockers are not allowed" pop-up. Does not interfere with the network.',
@@ -1893,11 +2107,23 @@
     api.onReady(() => {
       tick();
       // Fix: the original ran four handlers synchronously for every DOM
-      // mutation with two separate observers. One throttled observer now
-      // also watches the player's class (ad start/end is a class change).
-      api.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] }, tick, { throttle: 120 });
+      // mutation with two separate observers. Added and removed nodes are
+      // watched page-wide (shared with the other YouTube modules); the
+      // "ad-showing" class is watched on the player element only, instead
+      // of every class change anywhere on the page.
+      api.observe(document.body, { childList: true, subtree: true }, () => { watchPlayer(); tick(); }, { throttle: 120 });
+      let watched = null;
+      let stopWatch = null;
+      function watchPlayer() {
+        const p = player();
+        if (p === watched && (!p || p.isConnected)) return;
+        if (stopWatch) stopWatch();
+        watched = p;
+        stopWatch = p ? api.observe(p, { attributes: true, attributeFilter: ['class'] }, tick, { throttle: 60 }) : null;
+      }
+      watchPlayer();
       // Safety net while a video page is open.
-      api.every(1000, () => { if (/^\/(watch|shorts|embed)/.test(location.pathname)) tick(); });
+      api.every(1000, () => { if (/^\/(watch|shorts|embed)/.test(location.pathname)) { watchPlayer(); tick(); } });
     });
   }
 }));
@@ -2123,11 +2349,11 @@
   }
 }));
 
-  /* ---- module: yt-dislike v3.2.3 ---- */
+  /* ---- module: yt-dislike v3.2.4 ---- */
   register(({
   id: 'yt-dislike',
   name: 'Return YouTube Dislike',
-  version: '3.2.3',
+  version: '3.2.4',
   api: 1,
   source: 'Return YouTube Dislike 3.2.0-ios (Anarios & JRWR)',
   description: 'Shows dislike counts again (watch pages and Shorts, mobile and desktop) using the returnyoutubedislike.com API, and anonymously contributes your own likes/dislikes.',
@@ -5057,8 +5283,8 @@ function writeMobileDislikes() {
       return;
     }
     const target = dislikeButton.querySelector(".button-renderer-text") ?? getDislikeTextContainer();
-    if (target && target.innerText !== String(mobileDislikes)) {
-      target.innerText = mobileDislikes;
+    if (target && target.textContent !== String(mobileDislikes)) {
+      target.textContent = mobileDislikes;
     }
   } catch (error) {
     cLog("Mobile dislike update failed", error instanceof Error ? error.message : String(error));
@@ -5067,11 +5293,11 @@ function writeMobileDislikes() {
   }
 }));
 
-  /* ---- module: yt-player v1.4.0 ---- */
+  /* ---- module: yt-player v1.5.0 ---- */
   register(({
   id: 'yt-player',
   name: 'YouTube: Picture-in-Picture & player tweaks',
-  version: '1.4.0',
+  version: '1.5.0',
   api: 1,
   source: 'YouTube PIP Button (iOS Safari) 1.3 + YouTube options from Bypass All Shortlinks',
   description: 'Adds a Picture-in-Picture button to the YouTube player (m.youtube.com and desktop site). Optional: open Shorts in the normal player and keep playing in the background.',
@@ -5155,7 +5381,7 @@ function writeMobileDislikes() {
         pointer-events: auto !important; vertical-align: middle; }
       .ioss-pip-btn svg { width: 22px; height: 22px; filter: drop-shadow(0 0 2px rgba(0,0,0,.6)); pointer-events: none; }
       .ytp-right-controls .ioss-pip-btn { background: transparent !important; height: 100% !important; margin: 0 !important; border-radius: 0 !important; width: 48px !important; }
-    `, 'ioss-pip-css');
+    ` + (api.aeroCss ? api.aeroCss('.ioss-pip-btn:not(.ytp-right-controls .ioss-pip-btn)') : ''), 'ioss-pip-css');
 
     const PIP_PATH = 'M19 7h-8v6h8V7zm2-4H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H3V5h18v14z';
     const makeButton = () => {
@@ -5194,11 +5420,11 @@ function writeMobileDislikes() {
   }
 }));
 
-  /* ---- module: downloader v1.3.0 ---- */
+  /* ---- module: downloader v1.4.0 ---- */
   register(({
   id: 'downloader',
   name: 'Video downloader',
-  version: '1.3.0',
+  version: '1.4.0',
   api: 1,
   source: 'All-in-One Video Downloader 1.0.19 (Daniel)',
   description: 'Adds a download button for videos on YouTube, YouTube Music, TikTok, Instagram, X/Twitter, Threads, Facebook, Pinterest, Snapchat, TED, Douyin, Xiaohongshu and Spotify. Tapping it downloads the video and offers "Save Video" (camera roll) in the iPhone share sheet; YouTube saves up to 360p this way. Where a site does not allow that, or in website mode, it opens the downloader service instead.',
@@ -5610,15 +5836,32 @@ function writeMobileDislikes() {
     // layout no longer sets where we looked, so it rendered dark-on-dark and
     // was practically invisible. It now copies the like button's own colour,
     // background and height (icon-only in the new layout, a pill in the old).
+    // In the Aero look the button is a glossy blue orb/pill of its own and
+    // only takes its shape and height from the like button. The like button
+    // is measured once per button (and again if YouTube swaps it), not on
+    // every page change.
+    const glossy = api.aeroCss ? api.aeroCss('.ioss-yt-dl') : '';
+    const matched = new WeakMap();
     function matchNative(btn, like) {
       const native = like.querySelector('button') || like;
+      const seen = matched.get(btn);
+      if (seen && seen.native === native && Date.now() - seen.at < 5000) return;
       const st = getComputedStyle(native);
       const iconOnly = /^(transparent|rgba\(0, 0, 0, 0\))$/.test(st.backgroundColor);
       btn.classList.toggle('ioss-yt-dl-icon', iconOnly);
-      btn.style.setProperty('color', st.color, 'important');
-      btn.style.setProperty('background', iconOnly ? 'transparent' : st.backgroundColor, 'important');
+      if (!glossy) {
+        btn.style.setProperty('color', st.color, 'important');
+        btn.style.setProperty('background', iconOnly ? 'transparent' : st.backgroundColor, 'important');
+      }
       const h = Math.round(native.getBoundingClientRect().height);
-      if (h >= 28 && h <= 64) btn.style.setProperty('height', h + 'px', 'important');
+      if (h >= 28 && h <= 64) {
+        // The orb is capped at 44pt (Apple's tap size) so its rim and glow
+        // do not touch the neighbouring 48pt icon buttons.
+        const size = glossy && iconOnly ? Math.min(h, 44) : h;
+        btn.style.setProperty('height', size + 'px', 'important');
+        if (glossy && iconOnly) btn.style.setProperty('width', size + 'px', 'important');
+        matched.set(btn, { native, at: Date.now() });
+      }
     }
     if (cfg.ytInline && /(^|\.)(m|www)\.youtube\.com$/.test(host)) {
       api.addStyle(`
@@ -5631,7 +5874,7 @@ function writeMobileDislikes() {
         .ioss-yt-dl svg { width: 22px; height: 22px; pointer-events: none; }
         .ioss-yt-dl.ioss-yt-dl-icon { padding: 0; width: 44px; margin: 0 2px; border-radius: 50%; }
         .ioss-yt-dl.ioss-yt-dl-icon svg { width: 24px; height: 24px; }
-      `, 'ioss-yt-dl-css');
+      ` + glossy + (glossy ? '.ioss-yt-dl.ioss-yt-dl-icon { margin: 0 5px !important; } .ioss-yt-dl.ioss-yt-dl-icon svg { width: 22px; height: 22px; }' : ''), 'ioss-yt-dl-css');
       inlineYouTube();
       api.observe(document.body, { childList: true, subtree: true }, inlineYouTube, { throttle: 400 });
       api.onUrlChange(() => setTimeout(inlineYouTube, 300));
@@ -5666,7 +5909,8 @@ function writeMobileDislikes() {
     if (/(^|\.)(x|twitter)\.com$/.test(host)) {
       const SVG = 'M11.99 16l-5.7-5.7L7.7 8.88l3.29 3.3V2.59h2v9.59l3.3-3.3 1.41 1.42-5.71 5.7zM21 15l-.02 3.51c0 1.38-1.12 2.49-2.5 2.49H5.5C4.11 21 3 19.88 3 18.5V15h2v3.5c0 .28.22.5.5.5h12.98c.28 0 .5-.22.5-.5L19 15h2z';
       api.addStyle(`.ioss-x-dl{display:flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;margin-left:4px;color:rgb(113,118,123);border:0;background:none;padding:0;-webkit-tap-highlight-color:transparent}
-        .ioss-x-dl:active{color:rgb(29,155,240)} .ioss-x-dl svg{width:20px;height:20px}`);
+        .ioss-x-dl:active{color:rgb(29,155,240)} .ioss-x-dl svg{width:20px;height:20px}` +
+        (api.aeroCss && api.aeroCss('.ioss-x-dl') ? api.aeroCss('.ioss-x-dl') + '.ioss-x-dl{min-width:34px;min-height:34px;width:34px;height:34px;border-radius:50%!important;align-self:center} .ioss-x-dl svg{width:18px;height:18px}' : ''));
       const scan = () => {
         for (const art of document.querySelectorAll('article:not([data-ioss-dl])')) {
           const media = art.querySelector('[data-testid="videoComponent"], [data-testid="videoPlayer"], button[data-testid="playButton"], div[role="progressbar"]');

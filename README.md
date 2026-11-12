@@ -93,6 +93,13 @@ where you can:
 - turn auto-update on or off for each module
 - run an update check straight away
 - move the floating buttons to the left or right side, or higher or lower on the screen
+- choose the **Look**: **Aero** (default) or **Plain**
+
+**The Aero look** is the glossy "Frutiger Aero" style of the late 2000s: glass panels, sky blue and fresh green,
+and a bright highlight on every button. It applies to the settings sheet, its switches and buttons, messages, the
+settings dot, the floating buttons, and the buttons the suite adds inside pages (YouTube download and
+Picture-in-Picture, the X/Twitter download button). It follows the iPhone's light and dark appearance. Tap
+targets keep Apple's 44 pt size.
 
 If your manager supports menu commands (Stay or Tampermonkey), the sheet is also listed there. You can hide the
 dot in the sheet.
@@ -114,6 +121,19 @@ set to **Allow**, and that the suite is listed and switched on in the extension'
 
 Updates are fetched from the `main` branch of this repository. They are only as trustworthy as this repository
 itself, which is the same trust you give any auto-updating userscript.
+
+## Speed and battery
+
+- **One page watcher instead of several.** Modules that watch the same part of a page share a single observer.
+  On a YouTube watch page, the Picture-in-Picture button, ad skipping and the download button used three.
+- **Ad skipping watches the player only.** It used to be woken by every class change anywhere on the page; it now
+  listens for the player's own "ad showing" change.
+- **Updated modules load only where they run.** A hot-updated module is read from storage and compiled only on
+  pages it applies to, not on every site. The settings sheet loads the rest when you open it.
+- **Fewer timers.** Where the browser reports address changes itself, the suite checks the address three times
+  less often. Timers are skipped while the tab is in the background.
+- **Fewer layout passes on YouTube.** The download button measures the like button once instead of on every page
+  change, and the dislike counter no longer forces a layout twice a second.
 
 ## What was fixed for iPhone
 
